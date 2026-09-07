@@ -491,8 +491,10 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
     - Outline mode (bg_opacity=0): Text with colored outline/border
     - Box mode (bg_opacity>0): Text with semi-transparent background box
     """
-    ensure_file_unlocked(video_path)
-    ensure_file_unlocked(srt_path)
+    if video_path and os.path.exists(video_path):
+        ensure_file_unlocked(video_path)
+    if srt_path and os.path.exists(srt_path):
+        ensure_file_unlocked(srt_path)
 
     # Position mapping
     ass_alignment = 2
@@ -586,6 +588,7 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
         _log(f"❌ FFmpeg Subtitle Error: {e}")
         raise
 
-    ensure_file_unlocked(output_path)
+    if output_path and os.path.exists(output_path):
+        ensure_file_unlocked(output_path)
     return True
 
