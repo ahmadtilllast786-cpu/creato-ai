@@ -1195,39 +1195,138 @@ def apply_watermark(video_path):
     return False
 
 
+def build_blurred_background_filter(out_w=1080, out_h=1920, dim=True, orig_w=None, orig_h=None):
+    """
+    Builds the optimized FFmpeg filter complex for Blurred Background Fill (1080x1920):
+    1. Foreground: scaled to fit cleanly within out_w (scale=1080:-2), maintaining aspect ratio with no stretching/cropping.
+    2. Background: scaled/cropped to fill out_w x out_h, with box blur (20:5) and subtle dimming.
+    3. Filter: [0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[bg];[0:v]scale=1080:-2[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2
+    """
+    out_w = out_w + (out_w % 2)
+    out_h = out_h + (out_h % 2)
+    dim_str = ",eq=brightness=-0.05" if dim else ""
+    if orig_w and orig_h and (orig_w / float(orig_h) < out_w / float(out_h)):
+        fg_scale = f"scale=-2:{out_h}"
+    else:
+        fg_scale = f"scale={out_w}:-2"
+    return (
+        f"[0:v]scale={out_w}:{out_h}:force_original_aspect_ratio=increase,"
+        f"crop={out_w}:{out_h},boxblur=20:5{dim_str}[bg];"
+        f"[0:v]{fg_scale}[fg];"
+        f"[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1"
+    )
+
+
 def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPECT_RATIO,
                               force_strategy=None, crop_overrides=None):
     """
-    Core logic to reframe a horizontal video to a target aspect ratio using
-    scene detection and Active Speaker Tracking (MediaPipe).
-    aspect_ratio: width/height of the output (9/16 vertical, 1.0 square).
-    force_strategy / crop_overrides pin layouts and scene crops by hand (v2
-    engine only — the v1 loop below has no layout concept beyond its own
-    classifier).
+    Reframes video using Blurred Background Fill vertical layout (1080x1920):
+    1. Foreground Layer (The Original Video):
+       - Scale original video so its entire width fits cleanly inside the 1080px width
+         (scale=1080:-2), maintaining original aspect ratio with NO stretching and NO side-cropping.
+       - Position this sharp, full-width video dead-center on the screen.
+    2. Background Layer (The Full-Screen Fill):
+       - Scale/crop input video to fill the entire 1080x1920 canvas.
+       - Apply fast box blur (and subtle dimming) so the background fills the whole screen aesthetically.
+    3. FFmpeg Filter Structure:
+       [0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[bg];[0:v]scale=1080:-2[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2
     """
     ensure_file_unlocked(input_video)
-    # v2 engine: analyze downscaled, render natively in ffmpeg. Any failure
-    # falls back to the v1 frame loop below so a v2 edge case can't kill jobs.
-    if os.environ.get("REFRAME_ENGINE", "v2").strip().lower() != "v1":
+
+    # Legacy crop engine or manual scene crop overrides from editor UI
+    if crop_overrides or os.environ.get("REFRAME_STYLE", "").strip().lower() == "crop":
         try:
             import reframe_v2
             t0 = time.time()
             result = reframe_v2.render(input_video, final_output_video, aspect_ratio,
                                        force_strategy=force_strategy,
                                        crop_overrides=crop_overrides)
-            print(f"   ⏱️ Reframe v2 total: {time.time() - t0:.1f}s")
+            print(f"   ⏱️ Reframe crop total: {time.time() - t0:.1f}s")
             return result
         except Exception as e:
-            # Only v2 honours hand-framed scenes and forced layouts. Falling
-            # through to v1 would quietly return an automatically framed clip,
-            # and the user would see their correction vanish with no reason
-            # given — so surface the failure instead of discarding their input.
-            if crop_overrides or force_strategy:
+            if crop_overrides:
                 raise RuntimeError(
-                    f"manual framing needs the v2 reframe engine, which failed "
-                    f"({type(e).__name__}: {e})") from e
-            print(f"   ⚠️ Reframe v2 failed ({type(e).__name__}: {e}) — "
-                  f"falling back to v1 frame loop")
+                    f"manual framing needs crop reframe, which failed ({type(e).__name__}: {e})") from e
+            print(f"   ⚠️ Reframe crop failed ({type(e).__name__}: {e}) — falling back to blurred background fill")
+
+    t0 = time.time()
+    print(f"🎬 Reframing with Blurred Background Fill (1080x1920): {input_video}")
+
+    out_w = 1080
+    if aspect_ratio == 1.0:
+        out_h = 1080
+    elif aspect_ratio and aspect_ratio != ASPECT_RATIO:
+        out_h = int(round(out_w / aspect_ratio))
+    else:
+        out_h = 1920
+
+    out_w = out_w + (out_w % 2)
+    out_h = out_h + (out_h % 2)
+
+    orig_w, orig_h = None, None
+    try:
+        orig_w, orig_h = get_video_resolution(input_video)
+    except Exception:
+        pass
+
+    dim = os.environ.get("BLUR_BG_DIM", "1").strip() != "0"
+    filt = build_blurred_background_filter(out_w=out_w, out_h=out_h, dim=dim,
+                                          orig_w=orig_w, orig_h=orig_h)
+    filt_graph = f"{filt}[v]"
+
+    out_dir = os.path.dirname(os.path.abspath(final_output_video))
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    if os.path.isfile(final_output_video):
+        cleanup_temp_file(final_output_video)
+
+    cmd = [
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-i", input_video,
+        "-filter_complex", filt_graph,
+        "-map", "[v]", "-map", "0:a?",
+        *video_encode_args(QUALITY_FAST),
+        "-c:a", "copy",
+        *METADATA_SCRUB,
+        "-movflags", "+faststart",
+        final_output_video
+    ]
+    try:
+        run_ffmpeg_command(cmd, timeout=1800)
+    except subprocess.CalledProcessError:
+        cleanup_temp_file(final_output_video)
+        cmd_reencode = [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-i", input_video,
+            "-filter_complex", filt_graph,
+            "-map", "[v]", "-map", "0:a?",
+            *video_encode_args(QUALITY_FAST),
+            *audio_encode_args(),
+            *METADATA_SCRUB,
+            "-movflags", "+faststart",
+            final_output_video
+        ]
+        run_ffmpeg_command(cmd_reencode, timeout=1800)
+
+    ensure_file_unlocked(final_output_video)
+
+    # Record layout range sidecar
+    try:
+        import layout_ranges
+        with open_video_capture(final_output_video) as cap:
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+            dur = total_frames / fps if fps else 0.0
+        layout_ranges.write(final_output_video, [(0.0, dur, "general")])
+    except Exception:
+        pass
+
+    print(f"   ✅ Blurred background clip rendered in {time.time() - t0:.2f}s -> {final_output_video}")
+    return True
+
+
+def _process_video_to_vertical_v1_legacy(input_video, final_output_video, aspect_ratio=ASPECT_RATIO,
+                                        force_strategy=None, crop_overrides=None):
 
     # The v1 loop stages its work next to the final file: a silent video track
     # first, then the source audio, muxed together at the end.
