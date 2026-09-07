@@ -34,7 +34,7 @@ from clip_selection import (build_transcript_windows, clip_count_targets,
 from ffmpeg_utils import (video_encode_args, audio_encode_args, QUALITY,
                           QUALITY_FAST, METADATA_SCRUB, safe_remove, safe_replace,
                           run_ffmpeg_command, open_video_capture, ensure_file_unlocked,
-                          cleanup_temp_file)
+                          cleanup_temp_file, format_ffmpeg_error, escape_filter_value)
 from dotenv import load_dotenv
 import json
 
@@ -1293,7 +1293,7 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
     ]
     try:
         run_ffmpeg_command(cmd, timeout=1800)
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as copy_err:
         cleanup_temp_file(final_output_video)
         cmd_reencode = [
             "ffmpeg", "-y", "-loglevel", "error",
@@ -1306,9 +1306,24 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
             "-movflags", "+faststart",
             final_output_video
         ]
-        run_ffmpeg_command(cmd_reencode, timeout=1800)
+        try:
+            run_ffmpeg_command(cmd_reencode, timeout=1800)
+        except subprocess.CalledProcessError as enc_err:
+            print(f"   ❌ [Render Error] Failed to render {final_output_video}:")
+            print(format_ffmpeg_error(enc_err, max_lines=30))
+            cleanup_temp_file(final_output_video)
+            return False
+    except Exception as e:
+        print(f"   ❌ [Render Error] Unexpected error rendering {final_output_video}: {e}")
+        cleanup_temp_file(final_output_video)
+        return False
 
     ensure_file_unlocked(final_output_video)
+
+    # Verify output file exists and is non-empty
+    if not (os.path.exists(final_output_video) and os.path.getsize(final_output_video) > 0):
+        print(f"   ❌ [Render Error] Output file missing or zero bytes: {final_output_video}")
+        return False
 
     # Record layout range sidecar
     try:
@@ -2163,9 +2178,15 @@ if __name__ == '__main__':
                 print(f"\n🎬 Processing Clip {i+1}: {start}s - {end}s")
                 print(f"   Title: {clip.get('video_title_for_youtube_short', 'No Title')}")
 
+                # Ensure target output directory exists before any rendering begins
+                os.makedirs(output_dir, exist_ok=True)
+
                 clip_filename = f"{video_title}_clip_{i+1}.mp4"
                 clip_temp_path = os.path.join(output_dir, f"temp_{clip_filename}")
                 clip_final_path = os.path.join(output_dir, clip_filename)
+
+                os.makedirs(os.path.dirname(os.path.abspath(clip_temp_path)), exist_ok=True)
+                os.makedirs(os.path.dirname(os.path.abspath(clip_final_path)), exist_ok=True)
 
                 try:
                     # ffmpeg cut — re-encoding for precision on strict seconds.
@@ -2184,70 +2205,101 @@ if __name__ == '__main__':
                         try:
                             run_ffmpeg_command(cut_command)
                         except subprocess.CalledProcessError as cut_err:
-                            err_msg = cut_err.stderr.decode('utf-8', errors='replace') if cut_err.stderr else 'Unknown cut error'
-                            print(f"   ❌ Cut failed for clip {i+1} (exit code {cut_err.returncode}): {err_msg[:200]}")
+                            print(f"   ❌ Cut failed for clip {i+1}:")
+                            print(format_ffmpeg_error(cut_err, max_lines=30))
                             return False
 
-                    if not ensure_file_unlocked(clip_temp_path, timeout=15):
-                        print(f"   ❌ Cut file {clip_temp_path} is locked or empty!")
+                    if not ensure_file_unlocked(clip_temp_path, timeout=15) or not (os.path.exists(clip_temp_path) and os.path.getsize(clip_temp_path) > 0):
+                        print(f"   ❌ Cut file {clip_temp_path} is locked, missing or 0 bytes!")
                         return False
 
-                    success = render_clip(clip_temp_path, clip_final_path, output_format)
-                    if success:
-                        ensure_file_unlocked(clip_final_path, timeout=15)
-                    # Layer order: watermark burns into the canonical (so any
-                    # later hook replacement, which re-derives from it, keeps
-                    # the branding), the hook is a derived hooked_ file, and
-                    # captions go last on top of whichever is current. Each
-                    # worker writes only its own clip dict, so the re-dump
-                    # after the pool is race-free.
-                    if success and os.environ.get("WATERMARK") == "1":
-                        apply_watermark(clip_final_path)
-                        ensure_file_unlocked(clip_final_path, timeout=15)
+                    try:
+                        success = render_clip(clip_temp_path, clip_final_path, output_format)
+                    except Exception as render_err:
+                        print(f"   ❌ Render failed for clip {i+1}: {render_err}")
+                        if isinstance(render_err, subprocess.CalledProcessError):
+                            print(format_ffmpeg_error(render_err, max_lines=30))
+                        success = False
+
+                    if not success or not (os.path.exists(clip_final_path) and os.path.getsize(clip_final_path) > 0):
+                        print(f"   ❌ Final rendered clip {clip_final_path} missing or 0 bytes!")
+                        return False
+
+                    ensure_file_unlocked(clip_final_path, timeout=15)
+
                     deliver_path = clip_final_path
-                    # Which stretches were stacked (SPLIT): captions go on the
-                    # seam there, and /api/subtitle needs it again later.
-                    import layout_ranges as _layouts
-                    clip['layout_ranges'] = _layouts.read(clip_final_path)
-                    # The hook was written from the transcript alone. When the
-                    # render put this clip's meaning on the screen, rewrite hook
-                    # and title from three of its frames BEFORE burning them.
-                    if success and hook_grounding.wanted(clip['layout_ranges'], end - start):
-                        hook_grounding.reground(clip_final_path, clip, transcript, start, end)
-                    if success and os.environ.get("AUTO_HOOK") == "1":
-                        hooked = auto_hook_clip(clip_final_path, clip)
-                        if hooked:
-                            deliver_path, clip['auto_hook'] = hooked
-                            ensure_file_unlocked(deliver_path, timeout=15)
-                    if success:
+
+                    if os.environ.get("WATERMARK") == "1":
+                        try:
+                            if apply_watermark(clip_final_path):
+                                ensure_file_unlocked(clip_final_path, timeout=15)
+                        except Exception as wm_err:
+                            print(f"   ⚠️ Watermark pass warning for clip {i+1}: {wm_err}")
+
+                    try:
+                        import layout_ranges as _layouts
+                        clip['layout_ranges'] = _layouts.read(clip_final_path)
+                    except Exception as lr_err:
+                        print(f"   ⚠️ Layout ranges read warning: {lr_err}")
+                        clip['layout_ranges'] = []
+
+                    try:
+                        if hook_grounding.wanted(clip.get('layout_ranges', []), end - start):
+                            hook_grounding.reground(clip_final_path, clip, transcript, start, end)
+                    except Exception as hg_err:
+                        print(f"   ⚠️ Hook grounding warning for clip {i+1}: {hg_err}")
+
+                    if os.environ.get("AUTO_HOOK") == "1":
+                        try:
+                            hooked = auto_hook_clip(clip_final_path, clip)
+                            if hooked and os.path.exists(hooked[0]) and os.path.getsize(hooked[0]) > 0:
+                                deliver_path, clip['auto_hook'] = hooked
+                                ensure_file_unlocked(deliver_path, timeout=15)
+                        except Exception as hook_err:
+                            print(f"   ⚠️ Auto-hook warning for clip {i+1}: {hook_err}")
+
+                    captioned = None
+                    try:
+                        import layout_ranges as _layouts
                         captioned = auto_caption_clip(
                             deliver_path, transcript, start, end,
-                            split_ranges=_layouts.split_ranges(clip['layout_ranges']))
-                        print(f"   ✅ Clip {i+1} ready: {clip_final_path}")
+                            split_ranges=_layouts.split_ranges(clip.get('layout_ranges', [])))
+                        if captioned and (not os.path.exists(captioned) or os.path.getsize(captioned) == 0):
+                            print(f"   ⚠️ Captions file {captioned} missing or 0 bytes — using uncaptioned base")
+                            captioned = None
+                    except Exception as cap_err:
+                        print(f"   ⚠️ Auto-captions warning for clip {i+1}: {cap_err} — using uncaptioned base")
+                        captioned = None
 
-                        # Real Audio, Speech, Silence, and Speaker Metadata Extraction pass
-                        try:
-                            import metadata_extractor
-                            clip_meta = metadata_extractor.extract_clip_metadata(
-                                output_dir, clip_final_path, clip_index=i,
-                                existing_transcript=transcript,
-                                clip_start=start, clip_end=end
-                            )
-                            clip['real_metadata'] = clip_meta
-                            clip['is_extracted'] = True
-                        except Exception as meta_err:
-                            print(f"   ⚠️ Metadata extraction warning for clip {i+1}: {meta_err}")
-                        # Hand the API the file to actually serve for this clip.
-                        # Without it the status poller guesses the clean reframe
-                        # name, so a job in flight showed every clip stripped of
-                        # its hook and captions until the WHOLE job finished and
-                        # the result got rebuilt through _canonical_clip_file.
-                        # Printed only after the full chain (reframe, watermark,
-                        # hook, captions) so the file is complete when it is
-                        # announced, never one that ffmpeg is still writing.
-                        print(f"CLIP_READY {i} "
-                              f"{os.path.basename(captioned or deliver_path)}")
-                    return success
+                    final_delivery = captioned or deliver_path
+                    if not (os.path.exists(final_delivery) and os.path.getsize(final_delivery) > 0):
+                        print(f"   ❌ Final delivery file {final_delivery} missing or 0 bytes!")
+                        return False
+
+                    print(f"   ✅ Clip {i+1} ready: {final_delivery}")
+
+                    # Real Audio, Speech, Silence, and Speaker Metadata Extraction pass
+                    try:
+                        import metadata_extractor
+                        clip_meta = metadata_extractor.extract_clip_metadata(
+                            output_dir, clip_final_path, clip_index=i,
+                            existing_transcript=transcript,
+                            clip_start=start, clip_end=end
+                        )
+                        clip['real_metadata'] = clip_meta
+                        clip['is_extracted'] = True
+                    except Exception as meta_err:
+                        print(f"   ⚠️ Metadata extraction warning for clip {i+1}: {meta_err}")
+
+                    print(f"CLIP_READY {i} "
+                          f"{os.path.basename(captioned or deliver_path)}")
+                    return True
+
+                except Exception as clip_err:
+                    print(f"   ❌ Error processing clip {i+1}: {clip_err}")
+                    if isinstance(clip_err, subprocess.CalledProcessError):
+                        print(format_ffmpeg_error(clip_err, max_lines=30))
+                    return False
                 finally:
                     cleanup_temp_file(clip_temp_path)
 
@@ -2263,8 +2315,13 @@ if __name__ == '__main__':
                         res = future.result()
                         if res:
                             successful_clips += 1
+                        else:
+                            print(f"   ⚠️ Clip {i+1} did not produce a valid output file on disk.")
                     except Exception as e:
-                        print(f"   ❌ Clip {i+1} failed: {type(e).__name__}: {e}")
+                        print(f"   ❌ Clip {i+1} worker thread error: {type(e).__name__}: {e}")
+                        if isinstance(e, subprocess.CalledProcessError):
+                            print(format_ffmpeg_error(e, max_lines=30))
+
 
             if successful_clips == 0 and len(shorts) > 0:
                 print(f"❌ All {len(shorts)} clips failed during rendering!")

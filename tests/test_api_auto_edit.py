@@ -203,3 +203,33 @@ class TestAutoEditEndpoints:
         get_res = _request("GET", f"/api/clip/metadata?job_id={JOB_ID}&clip_index=0")
         assert get_res.status_code == 200, get_res.text
         assert get_res.json()["metadata"]["is_extracted"] is True
+
+    def test_auto_edit_with_custom_config(self, job, monkeypatch):
+        passed_kwargs = {}
+        def mock_auto_edit_clip(input_clip_path, output_clip_path, **kwargs):
+            passed_kwargs.update(kwargs)
+            with open(output_clip_path, "wb") as f:
+                f.write(b"dummy")
+            return {
+                "success": True,
+                "output_path": output_clip_path,
+                "config": kwargs.get("config")
+            }
+
+        monkeypatch.setattr(auto_editor, "auto_edit_clip", mock_auto_edit_clip)
+
+        custom_cfg = {
+            "max_zoom": 1.25,
+            "jump_cut_disguises": True,
+            "visual_polish": True,
+            "loudnorm": True,
+            "loudnorm_i": -14.0
+        }
+        res = _request("POST", "/api/clip/auto-edit", {
+            "job_id": JOB_ID,
+            "clip_index": 0,
+            "config": custom_cfg
+        })
+        assert res.status_code == 200, res.text
+        assert passed_kwargs.get("config") == custom_cfg
+

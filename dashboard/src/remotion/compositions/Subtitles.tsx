@@ -18,7 +18,7 @@ interface SubtitlesProps {
 const POSITION_MAP: Record<string, React.CSSProperties> = {
   top: { top: "12%", bottom: "auto" },
   middle: { top: "45%", bottom: "auto" },
-  bottom: { bottom: "10%", top: "auto" },
+  bottom: { bottom: "17%", top: "auto" },
 };
 
 export const Subtitles: React.FC<SubtitlesProps> = ({ config }) => {
@@ -91,8 +91,8 @@ const SubtitleBlock: React.FC<SubtitleBlockProps> = ({
     <div
       style={{
         position: "absolute",
-        left: 0,
-        right: 0,
+        left: "11%",
+        right: "13%",
         display: "flex",
         justifyContent: "center",
         ...positionStyle,
@@ -104,7 +104,7 @@ const SubtitleBlock: React.FC<SubtitleBlockProps> = ({
           flexWrap: "wrap",
           justifyContent: "center",
           gap: "6px 8px",
-          maxWidth: "85%",
+          maxWidth: "100%",
           ...bgStyle,
         }}
       >

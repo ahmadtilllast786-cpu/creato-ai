@@ -431,6 +431,33 @@ concurrency_semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
 def _enqueue_job(job_id: str, priority: int = 2):
     job_queue.put_nowait((priority, next(_job_seq), job_id))
 
+def find_job_metadata_file(job_dir: str) -> Optional[str]:
+    """Find the main job metadata JSON file in job_dir, strictly ignoring
+    per-clip real metadata sidecars (*_real_metadata.json).
+    """
+    if not job_dir or not os.path.exists(job_dir):
+        return None
+    candidates = glob.glob(os.path.join(job_dir, "*_metadata.json"))
+    main_candidates = [
+        f for f in candidates
+        if not f.endswith("_real_metadata.json") and not os.path.basename(f).startswith("temp_")
+    ]
+    if not main_candidates:
+        return None
+
+    # First look for a JSON file that actually contains the 'shorts' key
+    for cand in sorted(main_candidates, key=lambda p: (len(os.path.basename(p)), os.path.getmtime(p))):
+        try:
+            with open(cand, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if 'shorts' in data:
+                return cand
+        except Exception:
+            continue
+
+    return main_candidates[0]
+
+
 def _relocate_root_job_artifacts(job_id: str, job_output_dir: str) -> bool:
     """
     Backward-compat rescue:
@@ -563,10 +590,10 @@ def _reapply_captions(job_id, clip_index, video_path):
     Returns the captioned path, or None if there was nothing to caption.
     """
     try:
-        meta_files = glob.glob(os.path.join(OUTPUT_DIR, job_id, "*_metadata.json"))
-        if not meta_files:
+        target_meta = find_job_metadata_file(os.path.join(OUTPUT_DIR, job_id))
+        if not target_meta:
             return None
-        with open(meta_files[0], 'r') as f:
+        with open(target_meta, 'r', encoding='utf-8') as f:
             data = json.load(f)
         transcript = data.get('transcript')
         clips = data.get('shorts', [])
@@ -607,13 +634,13 @@ def _recover_jobs_from_disk():
         job_path = os.path.join(OUTPUT_DIR, job_id)
         if not os.path.isdir(job_path) or job_id in jobs:
             continue
-        json_files = glob.glob(os.path.join(job_path, "*_metadata.json"))
-        if not json_files:
+        target_meta = find_job_metadata_file(job_path)
+        if not target_meta:
             continue
         try:
-            with open(json_files[0], 'r') as f:
+            with open(target_meta, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+            base_name = os.path.basename(target_meta).replace('_metadata.json', '')
             clips = data.get('shorts', [])
             for i, clip in enumerate(clips):
                 if not clip.get('video_url'):
@@ -649,18 +676,15 @@ def _recover_or_create_job_from_disk(job_id: str):
     if not os.path.isdir(job_path):
         return jobs.get(job_id)
 
-    json_files = glob.glob(os.path.join(job_path, "*_metadata.json"))
-    main_json_files = [f for f in json_files if not f.endswith("_real_metadata.json")]
-    if not main_json_files and json_files:
-        main_json_files = json_files
+    target_meta = find_job_metadata_file(job_path)
 
     clips = []
     cost_analysis = None
-    if main_json_files:
+    if target_meta:
         try:
-            with open(main_json_files[0], 'r', encoding='utf-8') as f:
+            with open(target_meta, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            base_name = os.path.basename(main_json_files[0]).replace('_metadata.json', '')
+            base_name = os.path.basename(target_meta).replace('_metadata.json', '')
             clips = data.get('shorts', [])
             for i, clip in enumerate(clips):
                 if not clip.get('video_url'):
@@ -964,7 +988,7 @@ def _resume_interrupted_jobs() -> set:
         manifest_path = os.path.join(job_path, _RESUME_FILE)
         if not os.path.isfile(manifest_path):
             continue
-        if glob.glob(os.path.join(job_path, "*_metadata.json")):
+        if find_job_metadata_file(job_path):
             # Finished after all — recovered as completed already.
             _clear_resume_manifest(job_id)
             continue
@@ -1129,10 +1153,10 @@ def _sweep_retained_sources(now=None):
         if job_id == os.path.basename(THUMBNAILS_DIR):
             continue
         try:
-            metas = glob.glob(os.path.join(OUTPUT_DIR, job_id, "*_metadata.json"))
-            if not metas:
+            target_meta = find_job_metadata_file(os.path.join(OUTPUT_DIR, job_id))
+            if not target_meta:
                 continue
-            with open(metas[0]) as f:
+            with open(target_meta, 'r', encoding='utf-8') as f:
                 name = json.load(f).get('source_video')
             if not name:
                 continue
@@ -1926,40 +1950,35 @@ async def run_job(job_id, job_data):
             # Check for partial results every 2 seconds
             # Look for metadata file
             try:
-                json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
-                if json_files:
-                    target_json = json_files[0]
-                    # Read metadata (it might be being written to, so simple try/except or just read)
-                    # Use a lock or just robust read? json.load might fail if file is partial.
-                    # Usually main.py writes it once at start (based on my review).
-                    if os.path.getsize(target_json) > 0:
-                        with open(target_json, 'r') as f:
-                            data = json.load(f)
-                            
-                        base_name = os.path.basename(target_json).replace('_metadata.json', '')
-                        clips = data.get('shorts', [])
-                        cost_analysis = data.get('cost_analysis')
+                target_json = find_job_metadata_file(output_dir)
+                if target_json and os.path.getsize(target_json) > 0:
+                    with open(target_json, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
                         
-                        # Check which clips actually exist on disk
-                        # Only clips main.py has announced as finished. It names
-                        # the file itself, so a clip shows up WITH its hook and
-                        # captions instead of as the bare reframe, and it is never
-                        # served while ffmpeg is still writing it. A clip whose
-                        # marker never arrives (it failed) simply stays hidden
-                        # until the job ends and the result is rebuilt from disk.
-                        ready_files = (jobs.get(job_id) or {}).get('ready_files') or {}
-                        ready_clips = []
-                        for i, clip in enumerate(clips):
-                             clip_filename = ready_files.get(i)
-                             if not clip_filename:
-                                 continue
-                             clip_path = os.path.join(output_dir, clip_filename)
-                             if os.path.exists(clip_path) and os.path.getsize(clip_path) > 0:
-                                 clip['video_url'] = f"/videos/{job_id}/{clip_filename}"
-                                 ready_clips.append(clip)
-                        
-                        if ready_clips:
-                             jobs[job_id]['result'] = {'clips': ready_clips, 'cost_analysis': cost_analysis}
+                    base_name = os.path.basename(target_json).replace('_metadata.json', '')
+                    clips = data.get('shorts', [])
+                    cost_analysis = data.get('cost_analysis')
+                    
+                    # Check which clips actually exist on disk
+                    # Only clips main.py has announced as finished. It names
+                    # the file itself, so a clip shows up WITH its hook and
+                    # captions instead of as the bare reframe, and it is never
+                    # served while ffmpeg is still writing it. A clip whose
+                    # marker never arrives (it failed) simply stays hidden
+                    # until the job ends and the result is rebuilt from disk.
+                    ready_files = (jobs.get(job_id) or {}).get('ready_files') or {}
+                    ready_clips = []
+                    for i, clip in enumerate(clips):
+                         clip_filename = ready_files.get(i)
+                         if not clip_filename:
+                             continue
+                         clip_path = os.path.join(output_dir, clip_filename)
+                         if os.path.exists(clip_path) and os.path.getsize(clip_path) > 0:
+                             clip['video_url'] = f"/videos/{job_id}/{clip_filename}"
+                             ready_clips.append(clip)
+                    
+                    if ready_clips:
+                         jobs[job_id]['result'] = {'clips': ready_clips, 'cost_analysis': cost_analysis}
             except Exception as e:
                 # Ignore read errors during processing
                 pass
@@ -1977,14 +1996,13 @@ async def run_job(job_id, job_data):
                 loop.run_in_executor(None, upload_job_artifacts, output_dir, job_id)
             
             # Find result JSON
-            json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
-            if not json_files:
+            target_json = find_job_metadata_file(output_dir)
+            if not target_json:
                 # Backward-compat rescue if outputs were written to OUTPUT_DIR root
                 if _relocate_root_job_artifacts(job_id, output_dir):
-                    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
-            if json_files:
-                target_json = json_files[0] 
-                with open(target_json, 'r') as f:
+                    target_json = find_job_metadata_file(output_dir)
+            if target_json:
+                with open(target_json, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                 
                 # Enhance result with video URLs
@@ -1994,14 +2012,22 @@ async def run_job(job_id, job_data):
 
                 valid_clips = []
                 for i, clip in enumerate(clips):
-                     clip_filename = _canonical_clip_file(output_dir, base_name, i)
-                     clip_path = os.path.join(output_dir, clip_filename)
-                     if os.path.exists(clip_path) and os.path.getsize(clip_path) > 0:
-                         clip['video_url'] = f"/videos/{job_id}/{clip_filename}"
-                         valid_clips.append(clip)
-                     else:
-                         print(f"⚠️ Clip {i+1} ({clip_filename}) not found on disk at {clip_path}")
-                
+                    clip_filename = _canonical_clip_file(output_dir, base_name, i)
+                    clip_path = os.path.join(output_dir, clip_filename)
+                    if not (os.path.exists(clip_path) and os.path.getsize(clip_path) > 0):
+                        # Fallback: check any valid non-temp mp4 file matching clip_{i+1}.mp4
+                        candidates = sorted(glob.glob(os.path.join(output_dir, f"*clip_{i+1}.mp4")))
+                        valid_cands = [c for c in candidates if os.path.exists(c) and os.path.getsize(c) > 0 and not os.path.basename(c).startswith("temp_")]
+                        if valid_cands:
+                            clip_path = max(valid_cands, key=os.path.getmtime)
+                            clip_filename = os.path.basename(clip_path)
+
+                    if os.path.exists(clip_path) and os.path.getsize(clip_path) > 0:
+                        clip['video_url'] = f"/videos/{job_id}/{clip_filename}"
+                        valid_clips.append(clip)
+                    else:
+                        print(f"⚠️ Clip {i+1} ({clip_filename}) not found on disk at {clip_path}")
+
                 if valid_clips:
                     jobs[job_id]['result'] = {'clips': valid_clips, 'cost_analysis': cost_analysis}
                 else:
@@ -2624,7 +2650,7 @@ def _job_view_from_disk(job_id):
     job_path = os.path.join(OUTPUT_DIR, job_id)
     if not os.path.isdir(job_path):
         return None
-    if glob.glob(os.path.join(job_path, "*_metadata.json")):
+    if find_job_metadata_file(job_path):
         _recover_jobs_from_disk()
         return jobs.get(job_id)
     m = _read_manifest(job_id)
@@ -2680,9 +2706,9 @@ def _locate_source(job_id: str):
     if matches:
         return matches[0]
     try:
-        meta_files = glob.glob(os.path.join(OUTPUT_DIR, job_id, "*_metadata.json"))
-        if meta_files:
-            with open(meta_files[0], 'r') as f:
+        target_meta = find_job_metadata_file(os.path.join(OUTPUT_DIR, job_id))
+        if target_meta:
+            with open(target_meta, 'r', encoding='utf-8') as f:
                 name = json.load(f).get('source_video')
             if name:
                 candidate = os.path.join(OUTPUT_DIR, job_id, os.path.basename(name))
@@ -2791,18 +2817,18 @@ async def download_all_clips(job_id: str, request: Request):
         await _assert_job_owner(request, jobs[job_id])
 
     output_dir = os.path.join(OUTPUT_DIR, job_id)
-    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
-    if not json_files:
+    target_meta = find_job_metadata_file(output_dir)
+    if not target_meta:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    with open(json_files[0], 'r', encoding='utf-8') as f:
+    with open(target_meta, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     # The metadata file on disk never carries video_url — the pipeline doesn't
     # write it, it's injected into the in-memory job record. So prefer the live
     # record (it also tracks edits like subtitled_/hook_ renames) and fall back
     # to the canonical name a job/restore rebuilds, instead of finding nothing.
-    base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+    base_name = os.path.basename(target_meta).replace('_metadata.json', '')
     mem_clips = ((jobs.get(job_id) or {}).get('result') or {}).get('clips') or []
 
     files = []
@@ -2942,12 +2968,12 @@ async def _restore_job_files(job_id: str, proj, user_id: str) -> bool:
 
         # Register (or refresh) the in-memory job — same shape as
         # _recover_jobs_from_disk, so every edit endpoint works unchanged.
-        json_files = glob.glob(os.path.join(job_dir, "*_metadata.json"))
-        if not json_files:
+        target_json = find_job_metadata_file(job_dir)
+        if not target_json:
             raise HTTPException(status_code=502, detail="Project metadata missing")
-        with open(json_files[0], 'r') as f:
+        with open(target_json, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+        base_name = os.path.basename(target_json).replace('_metadata.json', '')
         clips = data.get('shorts', [])
         for i, clip in enumerate(clips):
             if not clip.get('video_url'):
@@ -3009,9 +3035,9 @@ async def _ensure_job_files(job_id: str, request: Request) -> bool:
     job_dir = os.path.join(OUTPUT_DIR, job_id)
     if os.path.isdir(job_dir):
         _recover_or_create_job_from_disk(job_id)
-        if job_id in jobs and (glob.glob(os.path.join(job_dir, "*_metadata.json")) or glob.glob(os.path.join(job_dir, "*.mp4"))):
+        if job_id in jobs and (find_job_metadata_file(job_dir) or glob.glob(os.path.join(job_dir, "*.mp4"))):
             return True
-    if job_id in jobs and glob.glob(os.path.join(job_dir, "*_metadata.json")):
+    if job_id in jobs and find_job_metadata_file(job_dir):
         return True
     if not BILLING_ENABLED:
         return False
@@ -3033,11 +3059,79 @@ from translate import translate_video, get_supported_languages
 from thumbnail import (analyze_video_for_titles, refine_titles, generate_thumbnail,
                        generate_youtube_description, extract_face_frames)
 
+def recover_existing_subtitle_settings(job_dir: str, clip_index: int) -> Optional[Dict[str, Any]]:
+    """Scan job_dir for existing ASS/SRT files to recover previously chosen subtitle styling."""
+    try:
+        ass_files = sorted(glob.glob(os.path.join(job_dir, f"subs_{clip_index}_*.ass")), reverse=True)
+        if not ass_files:
+            ass_files = sorted(glob.glob(os.path.join(job_dir, f"*_clip_{clip_index+1}*.ass")), reverse=True)
+        if not ass_files:
+            ass_files = sorted(glob.glob(os.path.join(job_dir, "*.ass")), reverse=True)
+
+        if ass_files:
+            with open(ass_files[0], "r", encoding="utf-8-sig", errors="replace") as f:
+                content = f.read()
+
+            parsed_settings: Dict[str, Any] = {}
+            for line in content.splitlines():
+                if line.startswith("Style:"):
+                    parts = [p.strip() for p in line.split(",")]
+                    if len(parts) >= 19:
+                        parsed_settings["font_name"] = parts[1]
+                        try:
+                            parsed_settings["font_size"] = int(parts[2])
+                        except Exception:
+                            parsed_settings["font_size"] = 50
+
+                        def _ass_to_hex(ass_col):
+                            c = str(ass_col).replace("&H", "").replace("&h", "").strip()
+                            if len(c) == 8:
+                                return f"#{c[6:8]}{c[4:6]}{c[2:4]}"
+                            elif len(c) == 6:
+                                return f"#{c[4:6]}{c[2:4]}{c[0:2]}"
+                            return "#FFFFFF"
+
+                        parsed_settings["font_color"] = _ass_to_hex(parts[3])
+                        parsed_settings["border_color"] = _ass_to_hex(parts[5]) if len(parts) > 5 else "#000000"
+                        try:
+                            parsed_settings["border_width"] = float(parts[16])
+                        except Exception:
+                            parsed_settings["border_width"] = 3.5
+
+                        align_val = 2
+                        try:
+                            align_val = int(parts[18])
+                        except Exception:
+                            pass
+                        parsed_settings["position"] = "top" if align_val == 6 else ("middle" if align_val == 10 else "bottom")
+
+            m_hi = re.search(r"\\c&H([0-9A-Fa-f]{6})&", content)
+            if m_hi:
+                raw_bgr = m_hi.group(1)
+                parsed_settings["highlight_color"] = f"#{raw_bgr[4:6]}{raw_bgr[2:4]}{raw_bgr[0:2]}"
+                parsed_settings["style"] = "karaoke"
+            else:
+                parsed_settings["style"] = "classic"
+
+            if parsed_settings.get("font_name"):
+                return parsed_settings
+    except Exception as e:
+        print(f"⚠️ recover_existing_subtitle_settings error: {e}")
+    return None
+
+
 class AutoEditRequest(BaseModel):
     job_id: str
     clip_index: int
     input_filename: Optional[str] = None
-    max_zoom: Optional[float] = 1.20
+    max_zoom: Optional[float] = None
+    scale_factor: Optional[float] = None
+    offset_x: Optional[int] = None
+    offset_y: Optional[int] = None
+    anchor: Optional[str] = None
+    position_x: Optional[float] = None
+    position_y: Optional[float] = None
+    config: Optional[Dict[str, Any]] = None
 
 
 class RevertBaseRequest(BaseModel):
@@ -3059,6 +3153,7 @@ class EditRequest(BaseModel):
     input_filename: Optional[str] = None
     mode: Optional[str] = None
     max_zoom: Optional[float] = 1.20
+    config: Optional[Dict[str, Any]] = None
 
 
 @app.post("/api/clip/auto-edit")
@@ -3119,10 +3214,9 @@ async def clip_auto_edit(
     if not real_meta:
         existing_tx = None
         try:
-            meta_files = glob.glob(os.path.join(job_dir, "*_metadata.json"))
-            main_meta = [f for f in meta_files if not f.endswith("_real_metadata.json")]
+            main_meta = find_job_metadata_file(job_dir)
             if main_meta:
-                with open(main_meta[0], 'r', encoding='utf-8') as f:
+                with open(main_meta, 'r', encoding='utf-8') as f:
                     meta_data = json.load(f)
                     existing_tx = meta_data.get('transcript')
         except Exception as e:
@@ -3155,10 +3249,9 @@ async def clip_auto_edit(
     # Fallback to global transcript if words are still None
     if not transcript_words:
         try:
-            meta_files = glob.glob(os.path.join(job_dir, "*_metadata.json"))
-            main_meta = [f for f in meta_files if not f.endswith("_real_metadata.json")]
+            main_meta = find_job_metadata_file(job_dir)
             if main_meta:
-                with open(main_meta[0], 'r', encoding='utf-8') as f:
+                with open(main_meta, 'r', encoding='utf-8') as f:
                     meta_data = json.load(f)
                     transcript_words = (meta_data.get('transcript') or {}).get('words')
         except Exception:
@@ -3167,6 +3260,29 @@ async def clip_auto_edit(
     try:
         import auto_editor
 
+        edit_cfg = dict(req.config or {})
+        if req.scale_factor is not None:
+            edit_cfg["scale_factor"] = req.scale_factor
+        if req.offset_x is not None:
+            edit_cfg["offset_x"] = req.offset_x
+        if req.offset_y is not None:
+            edit_cfg["offset_y"] = req.offset_y
+        if req.anchor is not None:
+            edit_cfg["anchor"] = req.anchor
+        if req.position_x is not None:
+            edit_cfg["position_x"] = req.position_x
+        if req.position_y is not None:
+            edit_cfg["position_y"] = req.position_y
+
+        sub_settings = edit_cfg.get("subtitle_settings") or clip.get("subtitle_settings")
+        if not sub_settings:
+            sub_settings = recover_existing_subtitle_settings(job_dir, req.clip_index)
+        if sub_settings:
+            edit_cfg["subtitle_settings"] = sub_settings
+            edit_cfg["burn_subtitles"] = True
+        elif had_captions:
+            edit_cfg["burn_subtitles"] = True
+
         def _do_auto_edit():
             return auto_editor.auto_edit_clip(
                 input_clip_path=base_path,
@@ -3174,12 +3290,13 @@ async def clip_auto_edit(
                 transcript_words=transcript_words,
                 max_zoom=req.max_zoom or 1.20,
                 precomputed_silences=precomputed_silences,
-                precomputed_centers=precomputed_centers
+                precomputed_centers=precomputed_centers,
+                config=edit_cfg,
             )
 
         result = await loop.run_in_executor(None, _do_auto_edit)
 
-        if had_captions:
+        if not result.get("has_subtitles") and had_captions:
             recap = await loop.run_in_executor(
                 None, _reapply_captions, req.job_id, req.clip_index, output_path)
             if recap:
@@ -3188,23 +3305,26 @@ async def clip_auto_edit(
         new_video_url = f"/videos/{req.job_id}/{edited_filename}"
         clip['video_url'] = new_video_url
         clip['is_auto_edited'] = True
+        if sub_settings:
+            clip['subtitle_settings'] = sub_settings
 
         # Persist in metadata.json
         try:
-            meta_files = glob.glob(os.path.join(job_dir, "*_metadata.json"))
-            main_meta = [f for f in meta_files if not f.endswith("_real_metadata.json")]
+            main_meta = find_job_metadata_file(job_dir)
             if main_meta:
-                with open(main_meta[0], 'r', encoding='utf-8') as f:
+                with open(main_meta, 'r', encoding='utf-8') as f:
                     meta = json.load(f)
                 shorts = meta.get('shorts', [])
                 if req.clip_index < len(shorts):
                     shorts[req.clip_index]['video_url'] = new_video_url
                     shorts[req.clip_index]['base_video_url'] = clip['base_video_url']
                     shorts[req.clip_index]['is_auto_edited'] = True
+                    if sub_settings:
+                        shorts[req.clip_index]['subtitle_settings'] = sub_settings
                     if real_meta:
                         shorts[req.clip_index]['real_metadata'] = real_meta
                     meta['shorts'] = shorts
-                    with open(main_meta[0], 'w', encoding='utf-8') as f:
+                    with open(main_meta, 'w', encoding='utf-8') as f:
                         json.dump(meta, f, indent=4)
         except Exception as e:
             print(f"⚠️ Failed to update metadata.json: {e}")
@@ -3297,10 +3417,9 @@ async def extract_metadata_endpoint(
 
     existing_tx = None
     try:
-        meta_files = glob.glob(os.path.join(job_dir, "*_metadata.json"))
-        main_meta = [f for f in meta_files if not f.endswith("_real_metadata.json")]
+        main_meta = find_job_metadata_file(job_dir)
         if main_meta:
-            with open(main_meta[0], 'r', encoding='utf-8') as f:
+            with open(main_meta, 'r', encoding='utf-8') as f:
                 meta_data = json.load(f)
                 existing_tx = meta_data.get('transcript')
     except Exception:
@@ -3358,17 +3477,16 @@ async def clip_revert_base(
     clip['is_auto_edited'] = False
 
     try:
-        meta_files = glob.glob(os.path.join(job_dir, "*_metadata.json"))
-        main_meta = [f for f in meta_files if not f.endswith("_real_metadata.json")]
+        main_meta = find_job_metadata_file(job_dir)
         if main_meta:
-            with open(main_meta[0], 'r', encoding='utf-8') as f:
+            with open(main_meta, 'r', encoding='utf-8') as f:
                 meta = json.load(f)
             shorts = meta.get('shorts', [])
             if req.clip_index < len(shorts):
                 shorts[req.clip_index]['video_url'] = base_url
                 shorts[req.clip_index]['is_auto_edited'] = False
                 meta['shorts'] = shorts
-                with open(main_meta[0], 'w', encoding='utf-8') as f:
+                with open(main_meta, 'w', encoding='utf-8') as f:
                     json.dump(meta, f, indent=4)
     except Exception as e:
         print(f"⚠️ Failed to update metadata.json on revert: {e}")
@@ -3398,6 +3516,7 @@ async def edit_clip(
                 clip_index=req.clip_index,
                 input_filename=req.input_filename,
                 max_zoom=req.max_zoom or 1.20,
+                config=req.config,
             ),
             request
         )
@@ -3476,9 +3595,9 @@ async def edit_clip(
                 # Load transcript from metadata
                 transcript = None
                 try:
-                    meta_files = glob.glob(os.path.join(OUTPUT_DIR, req.job_id, "*_metadata.json"))
-                    if meta_files:
-                        with open(meta_files[0], 'r') as f:
+                    target_meta = find_job_metadata_file(os.path.join(OUTPUT_DIR, req.job_id))
+                    if target_meta:
+                        with open(target_meta, 'r', encoding='utf-8') as f:
                             data = json.load(f)
                             transcript = data.get('transcript')
                 except Exception as e:
@@ -3529,15 +3648,15 @@ async def edit_clip(
         if req.clip_index < len(job['result']['clips']):
             job['result']['clips'][req.clip_index]['video_url'] = new_video_url
         try:
-            meta_files = glob.glob(os.path.join(OUTPUT_DIR, req.job_id, "*_metadata.json"))
-            if meta_files:
-                with open(meta_files[0], 'r') as f:
+            target_meta = find_job_metadata_file(os.path.join(OUTPUT_DIR, req.job_id))
+            if target_meta:
+                with open(target_meta, 'r', encoding='utf-8') as f:
                     meta = json.load(f)
                 shorts = meta.get('shorts', [])
                 if req.clip_index < len(shorts):
                     shorts[req.clip_index]['video_url'] = new_video_url
                     meta['shorts'] = shorts
-                    with open(meta_files[0], 'w') as f:
+                    with open(target_meta, 'w', encoding='utf-8') as f:
                         json.dump(meta, f, indent=4)
         except Exception as e:
             print(f"⚠️ Failed to update metadata.json: {e}")
@@ -3598,12 +3717,12 @@ async def get_clip_transcript(job_id: str, clip_index: int, request: Request):
 
     await _assert_job_owner(request, jobs[job_id])
     output_dir = os.path.join(OUTPUT_DIR, job_id)
-    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    target_json = find_job_metadata_file(output_dir)
 
-    if not json_files:
+    if not target_json:
         raise HTTPException(status_code=404, detail="Metadata not found")
 
-    with open(json_files[0], 'r') as f:
+    with open(target_json, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     transcript = data.get('transcript')
@@ -3693,10 +3812,10 @@ async def get_clip_edl(job_id: str, clip_index: int, request: Request):
     await _assert_job_owner(request, job)
 
     output_dir = os.path.join(OUTPUT_DIR, job_id)
-    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
-    if not json_files:
+    target_json = find_job_metadata_file(output_dir)
+    if not target_json:
         raise HTTPException(status_code=404, detail="Metadata not found")
-    with open(json_files[0], 'r') as f:
+    with open(target_json, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     clips = data.get('shorts', [])
@@ -3726,7 +3845,7 @@ async def get_clip_edl(job_id: str, clip_index: int, request: Request):
 
     current_file = (clip.get('video_url') or '').split('/')[-1]
     if not current_file:
-        base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+        base_name = os.path.basename(target_json).replace('_metadata.json', '')
         current_file = _canonical_clip_file(output_dir, base_name, clip_index)
 
     total = recut.total_duration(segments)
@@ -3818,10 +3937,10 @@ async def rerender_clip(req: RerenderRequest, request: Request):
 
 async def _rerender_locked(req: RerenderRequest, request: Request, job):
     output_dir = os.path.join(OUTPUT_DIR, req.job_id)
-    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
-    if not json_files:
+    target_json = find_job_metadata_file(output_dir)
+    if not target_json:
         raise HTTPException(status_code=404, detail="Metadata not found")
-    with open(json_files[0], 'r') as f:
+    with open(target_json, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     clips = data.get('shorts', [])
@@ -3830,7 +3949,7 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
     clip = clips[req.clip_index]
     transcript = data.get('transcript') or {}
 
-    base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+    base_name = os.path.basename(target_json).replace('_metadata.json', '')
     clean_name = f"{base_name}_clip_{req.clip_index + 1}.mp4"
     canonical_path = os.path.join(output_dir, clean_name)
 
@@ -3935,7 +4054,7 @@ async def _rerender_locked(req: RerenderRequest, request: Request, job):
             updates['crop_overrides'] = None
         clip.update(updates)
         data['shorts'] = clips
-        with open(json_files[0], 'w') as f:
+        with open(target_json, 'w') as f:
             json.dump(data, f, indent=2)
         mem_clips = (job.get('result') or {}).get('clips') or []
         if req.clip_index < len(mem_clips):
@@ -4016,10 +4135,10 @@ async def get_clip_scenes(job_id: str, clip_index: int, request: Request):
     await _assert_job_owner(request, job)
 
     output_dir = os.path.join(OUTPUT_DIR, job_id)
-    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
-    if not json_files:
+    target_json = find_job_metadata_file(output_dir)
+    if not target_json:
         raise HTTPException(status_code=404, detail="Metadata not found")
-    with open(json_files[0], 'r') as f:
+    with open(target_json, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     clips = data.get('shorts', [])
@@ -4204,10 +4323,10 @@ async def reframe_clip(req: ReframeRequest, request: Request):
 
 async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides):
     output_dir = os.path.join(OUTPUT_DIR, req.job_id)
-    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
-    if not json_files:
+    target_json = find_job_metadata_file(output_dir)
+    if not target_json:
         raise HTTPException(status_code=404, detail="Metadata not found")
-    with open(json_files[0], 'r') as f:
+    with open(target_json, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     clips = data.get('shorts', [])
@@ -4247,7 +4366,7 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
     v_transcript = (recut.virtual_transcript(data.get('transcript') or {}, segments)
                     if req.reapply_captions else None)
 
-    base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+    base_name = os.path.basename(target_json).replace('_metadata.json', '')
     # The CLEAN base name, exactly as /api/clip/rerender does — never the
     # current derived file. perform_recut prefixes whatever it is given, so
     # feeding it the newest derivative made every re-render add another
@@ -4283,7 +4402,7 @@ async def _reframe_locked(req: ReframeRequest, request: Request, job, overrides)
         }
         clip.update(updates)
         data['shorts'] = clips
-        with open(json_files[0], 'w') as f:
+        with open(target_json, 'w') as f:
             json.dump(data, f, indent=2)
         mem_clips = (job.get('result') or {}).get('clips') or []
         if req.clip_index < len(mem_clips):
@@ -4429,9 +4548,9 @@ async def generate_effects_config(
                 # Load transcript from metadata
                 transcript = None
                 try:
-                    meta_files = glob.glob(os.path.join(OUTPUT_DIR, req.job_id, "*_metadata.json"))
-                    if meta_files:
-                        with open(meta_files[0], 'r') as f:
+                    target_meta = find_job_metadata_file(os.path.join(OUTPUT_DIR, req.job_id))
+                    if target_meta:
+                        with open(target_meta, 'r', encoding='utf-8') as f:
                             data = json.load(f)
                             transcript = data.get('transcript')
                 except Exception as e:
@@ -4481,12 +4600,12 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
 
     # We need to access metadata.json to get the transcript
     output_dir = os.path.join(OUTPUT_DIR, req.job_id)
-    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    target_json = find_job_metadata_file(output_dir)
     
-    if not json_files:
+    if not target_json:
         raise HTTPException(status_code=404, detail="Metadata not found")
         
-    with open(json_files[0], 'r') as f:
+    with open(target_json, 'r', encoding='utf-8') as f:
         data = json.load(f)
         
     transcript = data.get('transcript')
@@ -4545,7 +4664,7 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
         # Fallback to standard naming
         filename = clip_data.get('video_url', '').split('/')[-1]
         if not filename:
-             base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+             base_name = os.path.basename(target_json).replace('_metadata.json', '')
              filename = f"{base_name}_clip_{req.clip_index+1}.mp4"
 
     # Re-subtitling must replace previous subtitles instead of burning over them.
@@ -4643,21 +4762,38 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
         await _metering.commit_reservation(reservation_id)
 
     # 3. Update Result and Metadata
+    sub_settings = {
+        "font_name": req.font_name,
+        "font_size": req.font_size,
+        "font_color": req.font_color,
+        "border_color": req.border_color,
+        "border_width": req.border_width,
+        "highlight_color": req.highlight_color,
+        "bg_color": req.bg_color,
+        "bg_opacity": req.bg_opacity,
+        "position": req.position,
+        "style": req.style,
+        "uppercase": req.uppercase,
+        "effect": req.effect,
+    }
+
     # Update InMemory Jobs
     if req.clip_index < len(job['result']['clips']):
          job['result']['clips'][req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
+         job['result']['clips'][req.clip_index]['subtitle_settings'] = sub_settings
     
     # Update Metadata on Disk (Persistence)
     try:
         if req.clip_index < len(clips):
             clips[req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
+            clips[req.clip_index]['subtitle_settings'] = sub_settings
             # Update the main data structure
             data['shorts'] = clips
             
             # Write back
-            with open(json_files[0], 'w') as f:
+            with open(target_json, 'w') as f:
                 json.dump(data, f, indent=4)
-                print(f"✅ Metadata updated with subtitled video for clip {req.clip_index}")
+                print(f"✅ Metadata updated with subtitled video and styling for clip {req.clip_index}")
     except Exception as e:
         print(f"⚠️ Failed to update metadata.json: {e}")
         # Non-critical, but good for persistence
@@ -4692,10 +4828,10 @@ async def remove_subtitles(req: RemoveSubtitlesRequest, request: Request):
     await _assert_job_owner(request, job)
 
     output_dir = os.path.join(OUTPUT_DIR, req.job_id)
-    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
-    if not json_files:
+    target_json = find_job_metadata_file(output_dir)
+    if not target_json:
         raise HTTPException(status_code=404, detail="Metadata not found")
-    with open(json_files[0], 'r') as f:
+    with open(target_json, 'r', encoding='utf-8') as f:
         data = json.load(f)
     clips = data.get('shorts', [])
     if req.clip_index >= len(clips):
@@ -4704,7 +4840,7 @@ async def remove_subtitles(req: RemoveSubtitlesRequest, request: Request):
     filename = os.path.basename(
         req.input_filename
         or (clips[req.clip_index].get('video_url') or '').split('/')[-1]
-        or f"{os.path.basename(json_files[0]).replace('_metadata.json', '')}"
+        or f"{os.path.basename(target_json).replace('_metadata.json', '')}"
            f"_clip_{req.clip_index + 1}.mp4")
 
     # Same walk-back the burn path uses, so this undoes any number of restyles.
@@ -4724,7 +4860,7 @@ async def remove_subtitles(req: RemoveSubtitlesRequest, request: Request):
     try:
         clips[req.clip_index]['video_url'] = new_url
         data['shorts'] = clips
-        with open(json_files[0], 'w') as f:
+        with open(target_json, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=4)
     except Exception as e:
         print(f"⚠️ Failed to update metadata.json: {e}")
@@ -4754,12 +4890,12 @@ async def add_hook(req: HookRequest, request: Request):
     job = jobs[req.job_id]
     await _assert_job_owner(request, job)
     output_dir = os.path.join(OUTPUT_DIR, req.job_id)
-    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    target_json = find_job_metadata_file(output_dir)
     
-    if not json_files:
+    if not target_json:
         raise HTTPException(status_code=404, detail="Metadata not found")
         
-    with open(json_files[0], 'r') as f:
+    with open(target_json, 'r', encoding='utf-8') as f:
         data = json.load(f)
         
     clips = data.get('shorts', [])
@@ -4774,7 +4910,7 @@ async def add_hook(req: HookRequest, request: Request):
     else:
         filename = clip_data.get('video_url', '').split('/')[-1]
         if not filename:
-             base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+             base_name = os.path.basename(target_json).replace('_metadata.json', '')
              filename = f"{base_name}_clip_{req.clip_index+1}.mp4"
          
     input_path = os.path.join(output_dir, filename)
@@ -4863,7 +4999,7 @@ async def add_hook(req: HookRequest, request: Request):
         if req.clip_index < len(clips):
             clips[req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
             data['shorts'] = clips
-            with open(json_files[0], 'w') as f:
+            with open(target_json, 'w') as f:
                 json.dump(data, f, indent=4)
                 print(f"✅ Metadata updated with hook video for clip {req.clip_index}")
     except Exception as e:
@@ -4906,12 +5042,12 @@ async def translate_clip(
     job = jobs[req.job_id]
     await _assert_job_owner(request, job)
     output_dir = os.path.join(OUTPUT_DIR, req.job_id)
-    json_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    target_json = find_job_metadata_file(output_dir)
 
-    if not json_files:
+    if not target_json:
         raise HTTPException(status_code=404, detail="Metadata not found")
 
-    with open(json_files[0], 'r') as f:
+    with open(target_json, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
     clips = data.get('shorts', [])
@@ -4926,7 +5062,7 @@ async def translate_clip(
     else:
         filename = clip_data.get('video_url', '').split('/')[-1]
         if not filename:
-             base_name = os.path.basename(json_files[0]).replace('_metadata.json', '')
+             base_name = os.path.basename(target_json).replace('_metadata.json', '')
              filename = f"{base_name}_clip_{req.clip_index+1}.mp4"
 
     input_path = os.path.join(output_dir, filename)
@@ -4972,7 +5108,7 @@ async def translate_clip(
         if req.clip_index < len(clips):
             clips[req.clip_index]['video_url'] = f"/videos/{req.job_id}/{output_filename}"
             data['shorts'] = clips
-            with open(json_files[0], 'w') as f:
+            with open(target_json, 'w') as f:
                 json.dump(data, f, indent=4)
                 print(f"✅ Metadata updated with translated video for clip {req.clip_index}")
     except Exception as e:

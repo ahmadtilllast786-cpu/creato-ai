@@ -219,7 +219,59 @@ def escape_filter_value(value):
     interpolated into a filter. Callers generate their own filenames, so they
     control this: use a neutral name, never one derived from a video title.
     """
-    return value.replace('\\', '/').replace(':', '\\:').replace("'", "\\'")
+    if not value:
+        return ""
+    # Try using relative path if possible to avoid Windows drive letter ':'
+    try:
+        if os.path.exists(value):
+            rel = os.path.relpath(value)
+            if not rel.startswith(".." + os.sep + ".."):
+                return rel.replace('\\', '/').replace("'", "\\'")
+    except Exception:
+        pass
+
+    import re
+    val = str(value).replace('\\', '/')
+    val = re.sub(r'(?<!\\):', r'\:', val)
+    val = val.replace("'", "\\'")
+    return val
+
+
+def format_ffmpeg_error(err_or_cmd, returncode=None, stdout=None, stderr=None, max_lines=30) -> str:
+    """Format exact raw FFmpeg command and last N lines of stdout/stderr error output."""
+    if isinstance(err_or_cmd, subprocess.CalledProcessError):
+        cmd = err_or_cmd.cmd
+        returncode = err_or_cmd.returncode
+        stdout = err_or_cmd.output
+        stderr = err_or_cmd.stderr
+    elif isinstance(err_or_cmd, subprocess.TimeoutExpired):
+        cmd = err_or_cmd.cmd
+        returncode = "TIMEOUT"
+        stdout = err_or_cmd.output
+        stderr = err_or_cmd.stderr
+    else:
+        cmd = err_or_cmd
+
+    cmd_str = " ".join(cmd) if isinstance(cmd, (list, tuple)) else str(cmd)
+
+    out_text = ""
+    if stdout:
+        out_text += stdout.decode("utf-8", errors="replace") if isinstance(stdout, bytes) else str(stdout)
+    err_text = ""
+    if stderr:
+        err_text += stderr.decode("utf-8", errors="replace") if isinstance(stderr, bytes) else str(stderr)
+
+    combined = (err_text + "\n" + out_text).strip()
+    raw_lines = [l.strip() for l in combined.splitlines() if l.strip()]
+    last_lines = "\n   ".join(raw_lines[-max_lines:]) if raw_lines else "No error output captured from FFmpeg."
+
+    return (
+        f"\n==================== FFmpeg Execution Failure (Exit Code: {returncode}) ====================\n"
+        f"Raw Command:\n   {cmd_str}\n\n"
+        f"Last {min(len(raw_lines), max_lines)} lines of FFmpeg error output:\n"
+        f"   {last_lines}\n"
+        f"========================================================================================="
+    )
 
 
 def run_ffmpeg_command(cmd, timeout=None, **kwargs):

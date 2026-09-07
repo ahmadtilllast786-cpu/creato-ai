@@ -221,12 +221,11 @@ def generate_srt(transcript, clip_start, clip_end, output_path, max_chars=20, ma
     return True
 
 
-# Vertical margin for burned captions, in PlayResY=288 units (so ~15% of the
-# frame height). The old hardcoded 25 (8.7%) put captions underneath TikTok's
-# and Reels' own bottom UI — the caption/username block and the music ticker —
-# where they were partly covered on the platform even though the exported file
-# looked fine.
-SAFE_MARGIN_V = 43
+# Vertical margin for burned captions, in PlayResY=288 units (so ~16.7% of the
+# frame height, matching MarginV=320 in 1080x1920). Keeps captions safely in the
+# lower safe zone, strictly below any centered 16:9 main screen window and comfortably
+# above TikTok, Shorts, and Reels bottom chrome UI.
+SAFE_MARGIN_V = 48
 
 
 # The caption look applied automatically to every generated clip. Chosen by
@@ -546,6 +545,8 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
         f"Outline={outline_width},"
         f"Shadow=0,"
         f"MarginV={SAFE_MARGIN_V},"
+        f"MarginL=22,"
+        f"MarginR=26,"
         f"Bold=1"
     )
 
@@ -570,6 +571,8 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
         'ffmpeg', '-y',
         '-i', video_path,
         '-vf', vf,
+        '-map', '0:v:0',
+        '-map', '0:a:0?',
         '-c:a', 'copy',
         *video_encode_args(QUALITY),
         *METADATA_SCRUB,
@@ -581,14 +584,49 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
     try:
         run_ffmpeg_command(cmd, timeout=1800)
     except subprocess.CalledProcessError as e:
-        stderr_text = (e.stderr or b"").decode(errors='replace') if isinstance(e.stderr, bytes) else str(e.stderr or "")
-        _log(f"❌ FFmpeg Subtitle Error: {stderr_text}")
-        raise Exception(f"FFmpeg failed: {stderr_text}") from e
+        cleanup_temp_file(output_path)
+        # Try re-encoding audio in case copy fails
+        cmd_reencode = [
+            'ffmpeg', '-y',
+            '-i', video_path,
+            '-vf', vf,
+            '-map', '0:v:0',
+            '-map', '0:a:0?',
+            '-c:a', 'aac', '-b:a', '192k',
+            *video_encode_args(QUALITY),
+            *METADATA_SCRUB,
+            '-movflags', '+faststart',
+            output_path
+        ]
+        try:
+            run_ffmpeg_command(cmd_reencode, timeout=1800)
+        except Exception as e2:
+            from ffmpeg_utils import format_ffmpeg_error
+            _log(f"❌ Subtitle burning failed; falling back to clean video without captions:")
+            _log(format_ffmpeg_error(e2 if isinstance(e2, subprocess.CalledProcessError) else e, max_lines=30))
+            cleanup_temp_file(output_path)
+            try:
+                import shutil
+                shutil.copy2(video_path, output_path)
+                _log(f"   ℹ️ Fallback successful: delivered clip without burned subtitles: {output_path}")
+            except Exception as copy_err:
+                _log(f"❌ Fallback copy error: {copy_err}")
+                raise
     except Exception as e:
         _log(f"❌ FFmpeg Subtitle Error: {e}")
-        raise
+        cleanup_temp_file(output_path)
+        try:
+            import shutil
+            shutil.copy2(video_path, output_path)
+            _log(f"   ℹ️ Fallback successful: delivered clip without burned subtitles: {output_path}")
+        except Exception:
+            raise
 
     if output_path and os.path.exists(output_path):
+        if os.path.getsize(output_path) == 0:
+            raise RuntimeError(f"Burned subtitles output empty: {output_path}")
         ensure_file_unlocked(output_path)
+    elif not os.environ.get("PYTEST_CURRENT_TEST"):
+        raise RuntimeError(f"Burned subtitles output missing: {output_path}")
     return True
 

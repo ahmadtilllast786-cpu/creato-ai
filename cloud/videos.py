@@ -29,7 +29,10 @@ async def archive_job(user_id, job_id, clips, output_dir):
     if not settings.r2_configured or not clips:
         return
     metadata_r2_key = None
-    meta_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    meta_files = [
+        f for f in glob.glob(os.path.join(output_dir, "*_metadata.json"))
+        if not f.endswith("_real_metadata.json") and not os.path.basename(f).startswith("temp_")
+    ]
     if meta_files:
         key = storage.job_key(user_id, job_id, os.path.basename(meta_files[0]))
         try:
@@ -157,7 +160,10 @@ async def archive_clip_edit(user_id, job_id, clip_index, output_dir, new_filenam
                 print(f"⚠️  R2 upload failed for hook intermediate of {job_id}: {e}")
 
     metadata_r2_key = None
-    meta_files = glob.glob(os.path.join(output_dir, "*_metadata.json"))
+    meta_files = [
+        f for f in glob.glob(os.path.join(output_dir, "*_metadata.json"))
+        if not f.endswith("_real_metadata.json") and not os.path.basename(f).startswith("temp_")
+    ]
     if meta_files:
         metadata_r2_key = storage.job_key(user_id, job_id, os.path.basename(meta_files[0]))
         try:
