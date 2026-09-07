@@ -215,7 +215,11 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
     """
     download_font_if_needed()
 
-    look = HOOK_STYLES.get(style, HOOK_STYLES["classic"])
+    if style not in HOOK_STYLES:
+        print(f"⚠️ Style '{style}' not found. Available: {list(HOOK_STYLES.keys())}. Using 'classic'")
+        style = "classic"
+
+    look = HOOK_STYLES[style]
     box_fill = look["box"]
     text_fill = look["text"]
     outline = look["outline"]
@@ -229,6 +233,7 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
     cornerradius = 20
     shadow_offset = (5, 5) 
     shadow_blur = 10
+    shadow_padding = 20  # Consistent padding for shadow/box boundaries
     
     # Font Size Calculation (approx 5% of width - tuned to match Noto Serif Bold metrics in browser)
     base_font_size = int(target_width * 0.05)
@@ -323,8 +328,8 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
     
     # Create Final Image with Rounded Corners and Shadow
     # 1. Canvas for Shadow (larger than box)
-    canvas_w = box_width + 40
-    canvas_h = box_height + 40
+    canvas_w = box_width + (2 * shadow_padding)
+    canvas_h = box_height + (2 * shadow_padding)
     
     img = Image.new('RGBA', (canvas_w, canvas_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -332,25 +337,25 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
     # 2. Draw Shadow (only for boxed styles)
     if draw_shadow and has_box:
         shadow_box = [
-            (20 + shadow_offset[0], 20 + shadow_offset[1]),
-            (20 + box_width + shadow_offset[0], 20 + box_height + shadow_offset[1])
+            (shadow_padding + shadow_offset[0], shadow_padding + shadow_offset[1]),
+            (shadow_padding + box_width + shadow_offset[0], shadow_padding + box_height + shadow_offset[1])
         ]
         draw.rounded_rectangle(shadow_box, radius=cornerradius, fill=(0, 0, 0, 100))
         # 3. Blur Shadow
-        img = img.filter(ImageFilter.GaussianBlur(5))
+        img = img.filter(ImageFilter.GaussianBlur(shadow_blur))
 
     # 4. Draw Box (sharper, on top of blurred shadow)
     draw_final = ImageDraw.Draw(img)
 
     if has_box:
         main_box = [
-            (20, 20),
-            (20 + box_width, 20 + box_height)
+            (shadow_padding, shadow_padding),
+            (shadow_padding + box_width, shadow_padding + box_height)
         ]
         draw_final.rounded_rectangle(main_box, radius=cornerradius, fill=box_fill)
 
     # 5. Draw Text
-    current_y = 20 + padding_y - 2 # Minor visual adjustment
+    current_y = shadow_padding + padding_y
     for i, line in enumerate(lines):
         if not line:
             current_y += font_size + line_spacing
@@ -361,7 +366,7 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
         line_h = text_heights[i] if i < len(text_heights) else bbox[3] - bbox[1]
 
         # Center X
-        x = 20 + int(box_width - line_w) // 2
+        x = shadow_padding + int(box_width - line_w) // 2
 
         # Draw text in the style's color (emoji runs use the emoji font)
         _draw_mixed(img, draw_final, (x, current_y), line, font, emoji_font,
@@ -414,14 +419,17 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
         # 3. Calculate Overlay Position
         overlay_x = (video_width - box_w) // 2
         
-        if position == "center":
-            overlay_y = (video_height - box_h) // 2
-        elif position == "bottom":
-             # Bottom 20% mark (approx)
-             overlay_y = int(video_height * 0.70)
-        else:
-             # Top 20% mark
-             overlay_y = int(video_height * 0.20)
+        POSITION_MAP = {
+            "top": int(video_height * 0.1),
+            "center": (video_height - box_h) // 2,
+            "bottom": int(video_height * 0.8),
+        }
+
+        if position not in POSITION_MAP:
+            print(f"⚠️ Unknown hook position '{position}', using 'top'")
+            position = "top"
+
+        overlay_y = POSITION_MAP[position]
         
         # 4. FFmpeg Command
         print(f"🎬 Overlaying hook: '{text}' at {overlay_x},{overlay_y}")
