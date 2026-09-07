@@ -1,4 +1,5 @@
 import subprocess
+import ffmpeg_env
 
 import pytest
 
@@ -14,6 +15,10 @@ from ffmpeg_utils import (
     video_encode_args,
     safe_remove,
     safe_replace,
+    run_ffmpeg_command,
+    open_video_capture,
+    ensure_file_unlocked,
+    cleanup_temp_file,
 )
 
 
@@ -181,4 +186,56 @@ def test_safe_remove_and_safe_replace():
         assert safe_replace(src, dst) is True
         assert not os.path.exists(src)
         assert open(dst, "r").read() == "new content"
+
+
+def test_run_ffmpeg_command_success():
+    import shutil
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg not installed")
+    out = run_ffmpeg_command(["ffmpeg", "-version"])
+    assert b"ffmpeg version" in out
+
+
+def test_run_ffmpeg_command_error():
+    import shutil
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg not installed")
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        run_ffmpeg_command(["ffmpeg", "-invalid_argument_xyz"])
+    assert exc_info.value.returncode != 0
+
+
+def test_ensure_file_unlocked_and_cleanup():
+    import tempfile, os
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "test_gate.txt")
+        # 1. Non-existent file returns False
+        assert ensure_file_unlocked(p, timeout=0.5) is False
+
+        # 2. Existing written file returns True
+        with open(p, "w") as f:
+            f.write("ready content")
+        assert ensure_file_unlocked(p, timeout=1.0) is True
+
+        # 3. Cleanup temp file succeeds
+        assert cleanup_temp_file(p) is True
+        assert not os.path.exists(p)
+
+
+def test_open_video_capture_context_manager():
+    import tempfile, os, shutil
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg not installed")
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "test_cap.mp4")
+        _tiny_mp4(p)
+        with open_video_capture(p) as cap:
+            assert cap.isOpened()
+            fps = cap.get(2)  # cv2.CAP_PROP_POS_FRAMES or similar
+            assert fps >= 0
+        # Check non-existent file raises IOError
+        with pytest.raises(IOError):
+            with open_video_capture(os.path.join(d, "missing.mp4")):
+                pass
+
 

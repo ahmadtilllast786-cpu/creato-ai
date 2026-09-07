@@ -28,7 +28,8 @@ import screencast_layout
 import layout_ranges
 import split_layout
 from ffmpeg_utils import (video_encode_args, escape_filter_value, QUALITY_FAST,
-                          METADATA_SCRUB)
+                          METADATA_SCRUB, run_ffmpeg_command, open_video_capture,
+                          ensure_file_unlocked, cleanup_temp_file)
 
 ANALYSIS_MAX_WIDTH = 640
 
@@ -337,8 +338,7 @@ def _analyze_trajectory(input_video, scenes_boundaries, scene_strategies,
 # --- render -----------------------------------------------------------------
 
 def _run(cmd):
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL,
-                   stderr=subprocess.PIPE, timeout=1800)
+    run_ffmpeg_command(cmd, timeout=1800)
 
 
 def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
@@ -359,6 +359,7 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
     the ones the tracker got right. Applied AFTER force_strategy: a per-scene
     hand position always beats the whole-clip choice for the scenes it names.
     """
+    ensure_file_unlocked(input_video)
     import main as m
     content_ranges = content_ranges or []
 
@@ -370,15 +371,8 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
     out_w, out_h = delivery_size(orig_w, orig_h, aspect_ratio)
 
     if not scenes:
-        import cv2
-        cap = cv2.VideoCapture(input_video)
-        try:
+        with open_video_capture(input_video) as cap:
             total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        finally:
-            cap.release()
-            del cap
-            import gc
-            gc.collect()
         from scenedetect import FrameTimecode
         scenes = [(FrameTimecode(0, fps), FrameTimecode(total, fps))]
 
@@ -613,5 +607,6 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
     # Tell the caption pass which stretches are stacked (see layout_ranges).
     layout_ranges.write(final_output_video,
                         [(s / fps, e / fps, strategy) for s, e, strategy in ranges])
+    ensure_file_unlocked(final_output_video)
     print(f"   ✅ Clip saved to {final_output_video}")
     return True

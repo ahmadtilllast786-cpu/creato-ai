@@ -6,7 +6,8 @@ import urllib.request
 import uuid
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-from ffmpeg_utils import video_encode_args, QUALITY, METADATA_SCRUB, safe_remove
+from ffmpeg_utils import (video_encode_args, QUALITY, METADATA_SCRUB, safe_remove,
+                          run_ffmpeg_command, ensure_file_unlocked, cleanup_temp_file)
 
 
 def _truncate_bytes(text, max_bytes):
@@ -386,6 +387,7 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
     """
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video {video_path} not found")
+    ensure_file_unlocked(video_path)
 
     # 1. Probe video width to scale text properly
     try:
@@ -415,6 +417,7 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
     
     try:
         img_path, box_w, box_h = create_hook_image(text, target_box_width, hook_filename, font_scale=font_scale, style=style)
+        ensure_file_unlocked(img_path)
         
         # 3. Calculate Overlay Position
         overlay_x = (video_width - box_w) // 2
@@ -447,7 +450,8 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
             output_path
         ]
         
-        subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800)
+        run_ffmpeg_command(ffmpeg_cmd, timeout=1800)
+        ensure_file_unlocked(output_path)
         print(f"✅ Hook added to {output_path}")
         return True
 
@@ -455,11 +459,12 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
         print("❌ FFmpeg hook overlay timed out after 1800s.")
         raise RuntimeError("FFmpeg hook overlay timed out after 1800s.")
     except subprocess.CalledProcessError as e:
-        print(f"❌ FFmpeg Error: {e.stderr.decode() if e.stderr else 'Unknown'}")
+        stderr_msg = e.stderr.decode(errors='replace') if isinstance(e.stderr, bytes) else str(e.stderr or 'Unknown')
+        print(f"❌ FFmpeg Error: {stderr_msg}")
         raise e
     except Exception as e:
         print(f"❌ Hook Gen Error: {e}")
         raise e
     finally:
         # Cleanup temp image safely
-        safe_remove(hook_filename)
+        cleanup_temp_file(hook_filename)

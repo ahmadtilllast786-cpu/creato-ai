@@ -19,6 +19,7 @@ which corner they are nearest, and grow a box from that corner until it covers
 them with margin.
 """
 import os
+from ffmpeg_utils import open_video_capture
 
 CORNER_MARGIN = 0.20   # a subject this far from an edge (as a fraction of the
                        # frame) still counts as anchored to it
@@ -160,39 +161,36 @@ def detect(video_path, samples=10):
     import main as m
     import screencast_layout
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        return None
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    if total <= 0 or not frame_w:
-        cap.release()
-        return None
-
     boxes = []
     try:
-        for i in range(samples):
-            cap.set(cv2.CAP_PROP_POS_FRAMES, int(i * total / samples))
-            ok, frame = cap.read()
-            if not ok:
-                continue
-            # Faces first, body as fallback: a webcam inset is small, and on a
-            # 1080p source the face inside it is often too few pixels for
-            # BlazeFace even at full resolution, while YOLO still finds the
-            # person.
-            faces = screencast_layout.detect_faces_full_res(frame)
-            if faces:
-                box = max(faces, key=lambda c: c['score'])['box']
-            else:
-                box = m.detect_person_yolo(frame)
-            if not box:
-                continue
-            if not is_cornered(box, frame_w, frame_h):
-                continue
-            boxes.append(inset_box(box, frame_w, frame_h))
-    finally:
-        cap.release()
+        with open_video_capture(video_path) as cap:
+            total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            if total <= 0 or not frame_w:
+                return None
+
+            for i in range(samples):
+                cap.set(cv2.CAP_PROP_POS_FRAMES, int(i * total / samples))
+                ok, frame = cap.read()
+                if not ok:
+                    continue
+                # Faces first, body as fallback: a webcam inset is small, and on a
+                # 1080p source the face inside it is often too few pixels for
+                # BlazeFace even at full resolution, while YOLO still finds the
+                # person.
+                faces = screencast_layout.detect_faces_full_res(frame)
+                if faces:
+                    box = max(faces, key=lambda c: c['score'])['box']
+                else:
+                    box = m.detect_person_yolo(frame)
+                if not box:
+                    continue
+                if not is_cornered(box, frame_w, frame_h):
+                    continue
+                boxes.append(inset_box(box, frame_w, frame_h))
+    except (IOError, OSError):
+        return None
 
     if len(boxes) < max(3, samples // 3):
         return None

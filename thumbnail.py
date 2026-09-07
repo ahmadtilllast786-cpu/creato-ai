@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from google import genai
 from google.genai import types
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from ffmpeg_utils import open_video_capture
 
 # Text/analysis model (titles, concepts, description). Deliberately NOT tied to
 # GEMINI_MODEL: the pipeline runs flash-lite for a closed-choice layout pick,
@@ -268,29 +269,29 @@ def extract_face_frames(video_path, session_id, n=5, samples=40):
     out_dir = os.path.join("output", "thumbnails", session_id, "frames")
     os.makedirs(out_dir, exist_ok=True)
 
-    cap = cv2.VideoCapture(video_path)
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     scored = []
     try:
-        if total <= 0:
-            return []
-        for i in range(samples):
-            idx = int((i + 0.5) * total / samples)
-            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-            ok, frame = cap.read()
-            if not ok:
-                continue
-            faces = detect_face_candidates(frame)
-            if not faces:
-                continue
-            x, y, w, h = max(faces, key=lambda f: f["score"])["box"]
-            fh, fw = frame.shape[:2]
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            scored.append(rank_frame(idx, idx / fps, frame, [x, y, w, h], (fw, fh),
-                                     cv2.Laplacian(gray, cv2.CV_64F).var()))
-    finally:
-        cap.release()
+        with open_video_capture(video_path) as cap:
+            total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+            if total <= 0:
+                return []
+            for i in range(samples):
+                idx = int((i + 0.5) * total / samples)
+                cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+                ok, frame = cap.read()
+                if not ok:
+                    continue
+                faces = detect_face_candidates(frame)
+                if not faces:
+                    continue
+                x, y, w, h = max(faces, key=lambda f: f["score"])["box"]
+                fh, fw = frame.shape[:2]
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                scored.append(rank_frame(idx, idx / fps, frame, [x, y, w, h], (fw, fh),
+                                         cv2.Laplacian(gray, cv2.CV_64F).var()))
+    except (IOError, OSError):
+        return []
 
     picked = pick_spread(scored, n, total)
 

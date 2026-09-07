@@ -32,6 +32,7 @@ from pydantic import BaseModel
 from s3_uploader import upload_job_artifacts, list_all_clips, upload_actor_to_s3, list_actor_gallery, upload_video_to_gallery, list_video_gallery
 import recut
 import layout_ranges
+from ffmpeg_utils import open_video_capture, ensure_file_unlocked, cleanup_temp_file, run_ffmpeg_command
 
 load_dotenv()
 
@@ -3019,13 +3020,12 @@ async def edit_clip(
                 
                 # 2. Get duration
                 import cv2
-                cap = cv2.VideoCapture(safe_input_path)
-                fps = cap.get(cv2.CAP_PROP_FPS)
-                frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                duration = frame_count / fps if fps else 0
-                cap.release()
+                with open_video_capture(safe_input_path) as cap:
+                    fps = cap.get(cv2.CAP_PROP_FPS)
+                    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    duration = frame_count / fps if fps else 0
                 
                 # Load transcript from metadata
                 transcript = None
@@ -3212,14 +3212,13 @@ def _source_duration_seconds(path):
     """Probe a video's duration; None when it can't be read."""
     try:
         import cv2
-        cap = cv2.VideoCapture(path)
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-        cap.release()
-        # OpenCV reports -1/-1 for files it can't read — a naive truthiness
-        # check would turn that into a phantom 1.0s duration.
-        if fps > 0 and frames > 0:
-            return round(frames / fps, 3)
+        with open_video_capture(path) as cap:
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+            # OpenCV reports -1/-1 for files it can't read — a naive truthiness
+            # check would turn that into a phantom 1.0s duration.
+            if fps > 0 and frames > 0:
+                return round(frames / fps, 3)
     except Exception:
         pass
     return None
@@ -3617,52 +3616,51 @@ async def get_clip_scenes(job_id: str, clip_index: int, request: Request):
             fps = float(fps) or 30.0
             orig_w, orig_h = m.get_video_resolution(work_path)
 
-            cap = cv2.VideoCapture(work_path)
-            if not scenes:
-                total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
-                bounds = [(0, total)]
-            else:
-                bounds = [(s.get_frames(), e.get_frames()) for s, e in scenes]
-
             out = []
-            for idx, (start_f, end_f) in enumerate(bounds):
-                mid = (start_f + end_f) // 2
-                cap.set(cv2.CAP_PROP_POS_FRAMES, mid)
-                ok, frame = cap.read()
-                thumb_name = f"temp_scene_{token}_{idx:03d}.jpg"
-                suggested = 0.5
-                suggested_y = 0.5
-                if ok:
-                    cv2.imwrite(os.path.join(output_dir, thumb_name), frame,
-                                [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-                    # Start the rectangle on the biggest face in the shot, so
-                    # the common case is a nudge rather than a hunt.
-                    try:
-                        faces = m.detect_face_candidates(frame)
-                        if faces:
-                            box = max(faces,
-                                      key=lambda f: f['box'][2] * f['box'][3])['box']
-                            suggested = min(1.0, max(0.0,
-                                                     (box[0] + box[2] / 2) / orig_w))
-                            # SPLIT halves crop vertically too, so the face's
-                            # height matters there (TRACK ignores it).
-                            suggested_y = min(1.0, max(0.0,
-                                                       (box[1] + box[3] / 2) / orig_h))
-                    except Exception:
-                        pass
+            with open_video_capture(work_path) as cap:
+                if not scenes:
+                    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
+                    bounds = [(0, total)]
                 else:
-                    thumb_name = None
+                    bounds = [(s.get_frames(), e.get_frames()) for s, e in scenes]
 
-                out.append({
-                    "index": idx,
-                    "start": round(start_f / fps, 3),
-                    "end": round(end_f / fps, 3),
-                    "thumbnail_url": (f"/videos/{job_id}/{thumb_name}"
-                                      if thumb_name else None),
-                    "suggested_center": round(suggested, 4),
-                    "suggested_center_y": round(suggested_y, 4),
-                })
-            cap.release()
+                for idx, (start_f, end_f) in enumerate(bounds):
+                    mid = (start_f + end_f) // 2
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, mid)
+                    ok, frame = cap.read()
+                    thumb_name = f"temp_scene_{token}_{idx:03d}.jpg"
+                    suggested = 0.5
+                    suggested_y = 0.5
+                    if ok:
+                        cv2.imwrite(os.path.join(output_dir, thumb_name), frame,
+                                    [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+                        # Start the rectangle on the biggest face in the shot, so
+                        # the common case is a nudge rather than a hunt.
+                        try:
+                            faces = m.detect_face_candidates(frame)
+                            if faces:
+                                box = max(faces,
+                                          key=lambda f: f['box'][2] * f['box'][3])['box']
+                                suggested = min(1.0, max(0.0,
+                                                         (box[0] + box[2] / 2) / orig_w))
+                                # SPLIT halves crop vertically too, so the face's
+                                # height matters there (TRACK ignores it).
+                                suggested_y = min(1.0, max(0.0,
+                                                           (box[1] + box[3] / 2) / orig_h))
+                        except Exception:
+                            pass
+                    else:
+                        thumb_name = None
+
+                    out.append({
+                        "index": idx,
+                        "start": round(start_f / fps, 3),
+                        "end": round(end_f / fps, 3),
+                        "thumbnail_url": (f"/videos/{job_id}/{thumb_name}"
+                                          if thumb_name else None),
+                        "suggested_center": round(suggested, 4),
+                        "suggested_center_y": round(suggested_y, 4),
+                    })
             return orig_w, orig_h, out, preview_name
         finally:
             # The uncropped cut becomes a light preview instead of being
@@ -3670,19 +3668,19 @@ async def get_clip_scenes(job_id: str, clip_index: int, request: Request):
             # the delivered 9:16 file no longer shows the rest of the room.
             try:
                 if os.path.exists(work_path):
-                    subprocess.run(
+                    ensure_file_unlocked(work_path)
+                    run_ffmpeg_command(
                         ["ffmpeg", "-y", "-loglevel", "error", "-i", work_path,
                          "-vf", "scale=640:-2", "-c:v", "libx264", "-preset",
                          "veryfast", "-crf", "30", "-c:a", "aac", "-b:a", "96k",
                          # faststart: the editor's <video> streams the preview;
                          # a tail moov would stall it until fully downloaded.
                          "-movflags", "+faststart",
-                         preview_path], check=True, timeout=600)
+                         preview_path], timeout=600)
             except Exception as exc:
                 print(f"Scene preview failed: {exc}")
             finally:
-                from ffmpeg_utils import safe_remove
-                safe_remove(work_path)
+                cleanup_temp_file(work_path)
 
     # Serialized per job: two overlapping opens would run two ffmpeg writers
     # on the same stable preview/thumbnail names and serve a torn file.

@@ -25,6 +25,7 @@ import os
 import numpy as np
 
 import split_layout
+from ffmpeg_utils import open_video_capture
 
 ENABLED = os.environ.get("PANEL_LAYOUT", "0") == "1"
 
@@ -225,50 +226,47 @@ def detect_panel_scenes(video_path, scenes, strategies, samples=None):
     import cv2
     import main as m
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        return {}
-
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
-    found = {}
-
     try:
-        for i, (start, end) in enumerate(scenes):
-            if i < len(strategies) and strategies[i] != 'GENERAL':
-                continue
-            s_f, e_f = start.get_frames(), end.get_frames()
-            duration = (e_f - s_f) / fps
-            if duration < MIN_SCENE_SECONDS:
-                continue
+        with open_video_capture(video_path) as cap:
+            fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+            frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+            found = {}
 
-            n = samples or int(min(max(duration / split_layout.SECONDS_PER_SAMPLE,
-                                       split_layout.MIN_SAMPLES),
-                                   split_layout.MAX_SAMPLES))
-            last_f = e_f - 1
-            if total_frames:
-                last_f = min(last_f, total_frames - 1)
-            if last_f < s_f:
-                continue
-
-            sampled = []
-            for f_idx in np.linspace(s_f, last_f, n):
-                cap.set(cv2.CAP_PROP_POS_FRAMES, int(round(f_idx)))
-                ok, frame = cap.read()
-                if not ok:
+            for i, (start, end) in enumerate(scenes):
+                if i < len(strategies) and strategies[i] != 'GENERAL':
                     continue
-                if frame.mean() < 16:
+                s_f, e_f = start.get_frames(), end.get_frames()
+                duration = (e_f - s_f) / fps
+                if duration < MIN_SCENE_SECONDS:
                     continue
-                sampled.append(m.detect_face_candidates(frame))
 
-            if len(sampled) < max(4, n // 2):
-                continue
+                n = samples or int(min(max(duration / split_layout.SECONDS_PER_SAMPLE,
+                                           split_layout.MIN_SAMPLES),
+                                       split_layout.MAX_SAMPLES))
+                last_f = e_f - 1
+                if total_frames:
+                    last_f = min(last_f, total_frames - 1)
+                if last_f < s_f:
+                    continue
 
-            centres = analyze_scene(sampled, frame_w)
-            if centres:
-                found[i] = centres
-    finally:
-        cap.release()
+                sampled = []
+                for f_idx in np.linspace(s_f, last_f, n):
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, int(round(f_idx)))
+                    ok, frame = cap.read()
+                    if not ok:
+                        continue
+                    if frame.mean() < 16:
+                        continue
+                    sampled.append(m.detect_face_candidates(frame))
 
-    return found
+                if len(sampled) < max(4, n // 2):
+                    continue
+
+                centres = analyze_scene(sampled, frame_w)
+                if centres:
+                    found[i] = centres
+
+            return found
+    except (IOError, OSError):
+        return {}

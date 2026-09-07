@@ -43,6 +43,7 @@ by hand wins: this only ever ADDS, so an explicit choice is never overridden.
 """
 import json
 import os
+from ffmpeg_utils import open_video_capture
 
 # AUTO_LAYOUT=1 decides and applies. AUTO_LAYOUT=shadow decides, logs, and
 # applies NOTHING: the render is byte-for-byte what it would have been.
@@ -105,26 +106,26 @@ def sample_frames(video_path, n=None, width=None):
 
     n = n or SAMPLE_FRAMES
     width = width or SAMPLE_WIDTH
-    cap = cv2.VideoCapture(video_path)
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     out = []
     try:
-        if total <= 0:
-            return out
-        for i in range(n):
-            cap.set(cv2.CAP_PROP_POS_FRAMES, int(i * total / n))
-            ok, frame = cap.read()
-            if not ok:
-                continue
-            h, w = frame.shape[:2]
-            scaled = cv2.resize(frame, (width, max(2, int(h * width / w))),
-                                interpolation=cv2.INTER_AREA)
-            ok, buf = cv2.imencode(".jpg", scaled,
-                                   [cv2.IMWRITE_JPEG_QUALITY, 80])
-            if ok:
-                out.append(buf.tobytes())
-    finally:
-        cap.release()
+        with open_video_capture(video_path) as cap:
+            total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            if total <= 0:
+                return out
+            for i in range(n):
+                cap.set(cv2.CAP_PROP_POS_FRAMES, int(i * total / n))
+                ok, frame = cap.read()
+                if not ok:
+                    continue
+                h, w = frame.shape[:2]
+                scaled = cv2.resize(frame, (width, max(2, int(h * width / w))),
+                                    interpolation=cv2.INTER_AREA)
+                ok, buf = cv2.imencode(".jpg", scaled,
+                                       [cv2.IMWRITE_JPEG_QUALITY, 80])
+                if ok:
+                    out.append(buf.tobytes())
+    except (IOError, OSError):
+        return []
     return out
 
 

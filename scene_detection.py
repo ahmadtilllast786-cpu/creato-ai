@@ -36,6 +36,7 @@ import cv2
 import numpy as np
 from scenedetect import open_video, SceneManager, FrameTimecode
 from scenedetect.detectors import ContentDetector
+from ffmpeg_utils import run_ffmpeg_command, open_video_capture, ensure_file_unlocked
 
 # TransNetV2 input size (width x height), fixed by the trained model.
 _TN2_W, _TN2_H = 48, 27
@@ -50,6 +51,7 @@ def detect_scenes(video_path):
     """Detect scenes. Returns (scene_list, fps) where scene_list is a list of
     (FrameTimecode, FrameTimecode) pairs — the same contract PySceneDetect's
     SceneManager.get_scene_list() has always given callers."""
+    ensure_file_unlocked(video_path)
     engine = os.environ.get("SCENE_ENGINE", "transnetv2").strip().lower()
     if engine != "pyscenedetect":
         try:
@@ -103,27 +105,21 @@ def _extract_frames_small(video_path):
         "-vf", f"scale={_TN2_W}:{_TN2_H}",
         "-pix_fmt", "rgb24", "-f", "rawvideo", "-",
     ]
-    proc = subprocess.run(cmd, stdout=subprocess.PIPE,
-                          stderr=subprocess.DEVNULL, check=True, timeout=900)
+    stdout = run_ffmpeg_command(cmd, timeout=900)
     frame_bytes = _TN2_H * _TN2_W * 3
-    n = len(proc.stdout) // frame_bytes
+    n = len(stdout) // frame_bytes
     if n == 0:
         raise RuntimeError("ffmpeg produced no frames")
-    return np.frombuffer(proc.stdout[:n * frame_bytes],
+    return np.frombuffer(stdout[:n * frame_bytes],
                          dtype=np.uint8).reshape(n, _TN2_H, _TN2_W, 3)
 
 
 def _detect_transnetv2(video_path):
     import torch
 
-    cap = cv2.VideoCapture(video_path)
-    try:
+    with open_video_capture(video_path) as cap:
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    finally:
-        cap.release()
-        del cap
-        gc.collect()
 
     frames = _extract_frames_small(video_path)
     model = _get_tn2_model()

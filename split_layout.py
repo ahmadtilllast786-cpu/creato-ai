@@ -17,6 +17,7 @@ moves.
 import os
 
 import numpy as np
+from ffmpeg_utils import open_video_capture
 
 ENABLED = os.environ.get("SPLIT_LAYOUT", "0") == "1"
 
@@ -224,56 +225,53 @@ def detect_split_scenes(video_path, scenes, strategies, samples=None):
     if not ENABLED:
         return {}
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        return {}
-
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    # Scene ends can sit past the last decodable frame (the detector counts from
-    # container metadata). Seeking there returns nothing, and those misses used
-    # to look like "the second speaker left", pushing a real two-shot below the
-    # presence bar: measured 4 of 12 samples lost on a 22s scene.
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
-    found = {}
-
     try:
-        for i, (start, end) in enumerate(scenes):
-            if i < len(strategies) and strategies[i] != 'GENERAL':
-                continue
-            s_f, e_f = start.get_frames(), end.get_frames()
-            duration = (e_f - s_f) / fps
-            if duration < MIN_SCENE_SECONDS:
-                continue
+        with open_video_capture(video_path) as cap:
+            fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+            frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            # Scene ends can sit past the last decodable frame (the detector counts from
+            # container metadata). Seeking there returns nothing, and those misses used
+            # to look like "the second speaker left", pushing a real two-shot below the
+            # presence bar: measured 4 of 12 samples lost on a 22s scene.
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+            found = {}
 
-            n = samples or int(min(max(duration / SECONDS_PER_SAMPLE,
-                                       MIN_SAMPLES), MAX_SAMPLES))
-
-            last_f = e_f - 1
-            if total_frames:
-                last_f = min(last_f, total_frames - 1)
-            if last_f < s_f:
-                continue
-
-            sampled = []
-            for f_idx in np.linspace(s_f, last_f, n):
-                cap.set(cv2.CAP_PROP_POS_FRAMES, int(round(f_idx)))
-                ok, frame = cap.read()
-                if not ok:
+            for i, (start, end) in enumerate(scenes):
+                if i < len(strategies) and strategies[i] != 'GENERAL':
                     continue
-                if frame.mean() < 16:  # fade to black, same as the classifier
+                s_f, e_f = start.get_frames(), end.get_frames()
+                duration = (e_f - s_f) / fps
+                if duration < MIN_SCENE_SECONDS:
                     continue
-                sampled.append(m.detect_face_candidates(frame))
 
-            # Too few readable samples to call it: defaulting to GENERAL costs a
-            # nicer layout, defaulting to SPLIT risks half a frame of nobody.
-            if len(sampled) < max(4, n // 2):
-                continue
+                n = samples or int(min(max(duration / SECONDS_PER_SAMPLE,
+                                           MIN_SAMPLES), MAX_SAMPLES))
 
-            pair = analyze_scene(sampled, frame_w)
-            if pair:
-                found[i] = pair
-    finally:
-        cap.release()
+                last_f = e_f - 1
+                if total_frames:
+                    last_f = min(last_f, total_frames - 1)
+                if last_f < s_f:
+                    continue
 
-    return found
+                sampled = []
+                for f_idx in np.linspace(s_f, last_f, n):
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, int(round(f_idx)))
+                    ok, frame = cap.read()
+                    if not ok:
+                        continue
+                    if frame.mean() < 16:  # fade to black, same as the classifier
+                        continue
+                    sampled.append(m.detect_face_candidates(frame))
+
+                # Too few readable samples to call it: defaulting to GENERAL costs a
+                # nicer layout, defaulting to SPLIT risks half a frame of nobody.
+                if len(sampled) < max(4, n // 2):
+                    continue
+
+                pair = analyze_scene(sampled, frame_w)
+                if pair:
+                    found[i] = pair
+
+            return found
+    except (IOError, OSError):
+        return {}

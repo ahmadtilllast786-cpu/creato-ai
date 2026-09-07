@@ -21,6 +21,7 @@ import os
 import subprocess
 
 import numpy as np
+from ffmpeg_utils import open_video_capture
 
 # Seconds per decision window. Short enough to catch a one-word interjection,
 # long enough that a single blurred frame cannot flip the answer.
@@ -239,10 +240,9 @@ def decode_activity(video_path, start_s, duration_s, boxes, fps,
     """
     import cv2
 
-    probe = cv2.VideoCapture(video_path)
-    orig_w = int(probe.get(cv2.CAP_PROP_FRAME_WIDTH))
-    orig_h = int(probe.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    probe.release()
+    with open_video_capture(video_path) as probe:
+        orig_w = int(probe.get(cv2.CAP_PROP_FRAME_WIDTH))
+        orig_h = int(probe.get(cv2.CAP_PROP_FRAME_HEIGHT))
     if not orig_w or not orig_h:
         return []
 
@@ -255,35 +255,34 @@ def decode_activity(video_path, start_s, duration_s, boxes, fps,
 
     regions = [mouth_region(b, small_w, small_h, scale) for b in boxes]
 
-    proc = subprocess.Popen(
+    per_window = max(1, int(round(fps * window_s)))
+    activity, bucket, prev = [], [], None
+    with subprocess.Popen(
         ["ffmpeg", "-v", "error", "-ss", f"{start_s:.4f}",
          "-t", f"{duration_s:.4f}", "-i", video_path,
          "-vf", f"scale={small_w}:{small_h}", "-f", "rawvideo",
          "-pix_fmt", "gray", "-"],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-        bufsize=small_w * small_h * 4)
-
-    per_window = max(1, int(round(fps * window_s)))
-    activity, bucket, prev = [], [], None
-    try:
-        while True:
-            buf = proc.stdout.read(small_w * small_h)
-            if len(buf) < small_w * small_h:
-                break
-            frame = np.frombuffer(buf, dtype=np.uint8).reshape(small_h, small_w)
-            if prev is not None:
-                bucket.append([
-                    float(np.mean(np.abs(
-                        frame[y0:y1, x0:x1].astype(np.int16)
-                        - prev[y0:y1, x0:x1].astype(np.int16))))
-                    for x0, y0, x1, y1 in regions])
-            prev = frame
-            if len(bucket) >= per_window:
-                activity.append(np.mean(bucket, axis=0).tolist())
-                bucket = []
-    finally:
-        proc.stdout.close()
-        proc.wait()
+        bufsize=small_w * small_h * 4) as proc:
+        try:
+            while True:
+                buf = proc.stdout.read(small_w * small_h)
+                if len(buf) < small_w * small_h:
+                    break
+                frame = np.frombuffer(buf, dtype=np.uint8).reshape(small_h, small_w)
+                if prev is not None:
+                    bucket.append([
+                        float(np.mean(np.abs(
+                            frame[y0:y1, x0:x1].astype(np.int16)
+                            - prev[y0:y1, x0:x1].astype(np.int16))))
+                        for x0, y0, x1, y1 in regions])
+                prev = frame
+                if len(bucket) >= per_window:
+                    activity.append(np.mean(bucket, axis=0).tolist())
+                    bucket = []
+        finally:
+            if proc.stdout:
+                proc.stdout.close()
 
     if bucket:
         activity.append(np.mean(bucket, axis=0).tolist())

@@ -4,7 +4,8 @@ import subprocess
 import sys
 
 from ffmpeg_utils import (video_encode_args, escape_filter_value, QUALITY,
-                          METADATA_SCRUB)
+                          METADATA_SCRUB, run_ffmpeg_command, open_video_capture,
+                          ensure_file_unlocked, cleanup_temp_file)
 
 
 _STDIO_CONFIGURED = False
@@ -137,16 +138,10 @@ def generate_srt_from_video(video_path, output_path, max_chars=20, max_duration=
 
     # Get video duration to use as clip_end
     import cv2
-    cap = cv2.VideoCapture(video_path)
-    try:
+    with open_video_capture(video_path) as cap:
         fps = cap.get(cv2.CAP_PROP_FPS)
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         duration = frame_count / fps if fps else 0
-    finally:
-        cap.release()
-        del cap
-        import gc
-        gc.collect()
 
     if style == "karaoke":
         return generate_ass(transcript, 0, duration, output_path, max_chars, max_duration, **style_opts)
@@ -496,6 +491,9 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
     - Outline mode (bg_opacity=0): Text with colored outline/border
     - Box mode (bg_opacity>0): Text with semi-transparent background box
     """
+    ensure_file_unlocked(video_path)
+    ensure_file_unlocked(srt_path)
+
     # Position mapping
     ass_alignment = 2
     align_lower = str(alignment).lower()
@@ -578,12 +576,16 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
     ]
 
     _log(f"🎬 Burning subtitles: {' '.join(cmd)}")
-    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-
-    if result.returncode != 0:
-        stderr_text = result.stderr.decode(errors='replace')
+    try:
+        run_ffmpeg_command(cmd, timeout=1800)
+    except subprocess.CalledProcessError as e:
+        stderr_text = (e.stderr or b"").decode(errors='replace') if isinstance(e.stderr, bytes) else str(e.stderr or "")
         _log(f"❌ FFmpeg Subtitle Error: {stderr_text}")
-        raise Exception(f"FFmpeg failed: {stderr_text}")
+        raise Exception(f"FFmpeg failed: {stderr_text}") from e
+    except Exception as e:
+        _log(f"❌ FFmpeg Subtitle Error: {e}")
+        raise
 
+    ensure_file_unlocked(output_path)
     return True
 

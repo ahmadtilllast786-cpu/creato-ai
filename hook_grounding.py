@@ -24,6 +24,8 @@ import json
 import os
 from typing import Optional
 
+from ffmpeg_utils import open_video_capture
+
 SCREEN_LAYOUTS = {"screencast", "wide", "inset"}
 FRAMES = int(os.environ.get("HOOK_GROUNDING_FRAMES", "3"))
 WIDTH = int(os.environ.get("HOOK_GROUNDING_WIDTH", "1024"))
@@ -102,25 +104,22 @@ def frames_at(video_path, times, width=None):
     import cv2
 
     width = width or WIDTH
-    cap = cv2.VideoCapture(video_path)
     out = []
     try:
-        for t in times:
-            cap.set(cv2.CAP_PROP_POS_MSEC, float(t) * 1000.0)
-            ok, frame = cap.read()
-            if not ok:
-                continue
-            h, w = frame.shape[:2]
-            scaled = cv2.resize(frame, (width, max(2, int(h * width / w))),
-                                interpolation=cv2.INTER_AREA)
-            ok, buf = cv2.imencode(".jpg", scaled, [cv2.IMWRITE_JPEG_QUALITY, 80])
-            if ok:
-                out.append(buf.tobytes())
-    finally:
-        cap.release()
-        del cap
-        import gc
-        gc.collect()
+        with open_video_capture(video_path) as cap:
+            for t in times:
+                cap.set(cv2.CAP_PROP_POS_MSEC, float(t) * 1000.0)
+                ok, frame = cap.read()
+                if not ok:
+                    continue
+                h, w = frame.shape[:2]
+                scaled = cv2.resize(frame, (width, max(2, int(h * width / w))),
+                                    interpolation=cv2.INTER_AREA)
+                ok, buf = cv2.imencode(".jpg", scaled, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                if ok:
+                    out.append(buf.tobytes())
+    except (IOError, OSError):
+        return []
     return out
 
 

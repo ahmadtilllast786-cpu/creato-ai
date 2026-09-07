@@ -31,7 +31,9 @@ from clip_selection import (build_transcript_windows, clip_count_targets,
                             clip_duration_bounds, snap_clip_to_words,
                             trim_to_best)
 from ffmpeg_utils import (video_encode_args, audio_encode_args, QUALITY,
-                          QUALITY_FAST, METADATA_SCRUB, safe_remove, safe_replace)
+                          QUALITY_FAST, METADATA_SCRUB, safe_remove, safe_replace,
+                          run_ffmpeg_command, open_video_capture, ensure_file_unlocked,
+                          cleanup_temp_file)
 from dotenv import load_dotenv
 import json
 
@@ -564,55 +566,54 @@ def analyze_scenes_strategy(video_path, scenes):
     Analyzes each scene to determine if it should be TRACK (Single person) or GENERAL (Group/Wide).
     Returns list of strategies corresponding to scenes.
     """
-    cap = cv2.VideoCapture(video_path)
     strategies = []
+    fps = 30.0
+    try:
+        with open_video_capture(video_path) as cap:
+            fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
 
-    if not cap.isOpened():
+            for start, end in tqdm(scenes, desc="   Analyzing Scenes"):
+                s_f, e_f = start.get_frames(), end.get_frames()
+                # Sample 5 frames spread across the scene, clamped inside it (the old
+                # start+5/end-5 samples landed outside scenes shorter than ~10 frames).
+                margin = min(2, max(0, (e_f - s_f - 1) // 2))
+                frames_to_check = sorted(set(
+                    int(round(f)) for f in np.linspace(s_f + margin, e_f - 1 - margin, 5)
+                ))
+
+                face_counts = []
+                for f_idx in frames_to_check:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, f_idx)
+                    ret, frame = cap.read()
+                    if not ret: continue
+
+                    # Near-black frames (fades, cut-to-black) carry no faces and used
+                    # to drag single-person scenes into GENERAL. Skip them.
+                    if frame.mean() < 16:
+                        continue
+
+                    # Detect faces
+                    candidates = detect_face_candidates(frame)
+                    face_counts.append(len(candidates))
+
+                # Decision Logic
+                if not face_counts:
+                    avg_faces = 0
+                else:
+                    avg_faces = sum(face_counts) / len(face_counts)
+
+                # Strategy:
+                # 0 faces -> GENERAL (Landscape/B-roll)
+                # 1 face -> TRACK
+                # > 1.2 faces -> GENERAL (Group)
+
+                if avg_faces > 1.2 or avg_faces < 0.5:
+                    strategies.append('GENERAL')
+                else:
+                    strategies.append('TRACK')
+    except Exception as e:
+        print(f"   ⚠️ Could not analyze scene strategy: {e}")
         return ['TRACK'] * len(scenes)
-
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-
-    for start, end in tqdm(scenes, desc="   Analyzing Scenes"):
-        s_f, e_f = start.get_frames(), end.get_frames()
-        # Sample 5 frames spread across the scene, clamped inside it (the old
-        # start+5/end-5 samples landed outside scenes shorter than ~10 frames).
-        margin = min(2, max(0, (e_f - s_f - 1) // 2))
-        frames_to_check = sorted(set(
-            int(round(f)) for f in np.linspace(s_f + margin, e_f - 1 - margin, 5)
-        ))
-
-        face_counts = []
-        for f_idx in frames_to_check:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, f_idx)
-            ret, frame = cap.read()
-            if not ret: continue
-
-            # Near-black frames (fades, cut-to-black) carry no faces and used
-            # to drag single-person scenes into GENERAL. Skip them.
-            if frame.mean() < 16:
-                continue
-
-            # Detect faces
-            candidates = detect_face_candidates(frame)
-            face_counts.append(len(candidates))
-
-        # Decision Logic
-        if not face_counts:
-            avg_faces = 0
-        else:
-            avg_faces = sum(face_counts) / len(face_counts)
-
-        # Strategy:
-        # 0 faces -> GENERAL (Landscape/B-roll)
-        # 1 face -> TRACK
-        # > 1.2 faces -> GENERAL (Group)
-
-        if avg_faces > 1.2 or avg_faces < 0.5:
-            strategies.append('GENERAL')
-        else:
-            strategies.append('TRACK')
-
-    cap.release()
 
     # Hysteresis: a short scene whose two neighbors agree on the opposite
     # strategy is almost always a sampling miss (profile face, insert shot).
@@ -632,16 +633,9 @@ def detect_scenes(video_path):
     return scene_detection.detect_scenes(video_path)
 
 def get_video_resolution(video_path):
-    probe = cv2.VideoCapture(video_path)
-    try:
-        if not probe.isOpened():
-            raise IOError(f"cannot open video: {video_path}")
+    with open_video_capture(video_path) as probe:
         return (int(probe.get(cv2.CAP_PROP_FRAME_WIDTH)),
                 int(probe.get(cv2.CAP_PROP_FRAME_HEIGHT)))
-    finally:
-        probe.release()
-        del probe
-        gc.collect()
 
 
 # Byte budget for the sanitized video title used as the stem of every derived
@@ -976,14 +970,16 @@ def finalize_clip_passthrough(input_video, final_output_video):
     The input is the freshly encoded cut, so a stream-copy remux is enough to
     add +faststart — re-encoding here would only cost time and quality.
     """
-    safe_remove(final_output_video)
+    ensure_file_unlocked(input_video)
+    cleanup_temp_file(final_output_video)
     print(f"🎬 Passthrough (native framing): {input_video}")
     cmd = [
         'ffmpeg', '-y', '-i', input_video,
         '-c', 'copy', *METADATA_SCRUB, '-movflags', '+faststart',
         final_output_video,
     ]
-    subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800)
+    run_ffmpeg_command(cmd, timeout=1800)
+    ensure_file_unlocked(final_output_video)
     print(f"✅ Clip saved to {final_output_video}")
     return True
 
@@ -1013,6 +1009,7 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=
         return None
     if not transcript or not transcript.get('segments'):
         return None  # silent video: nothing to caption
+    ensure_file_unlocked(clip_path)
     ass_path = None
     try:
         import subtitles as _subs
@@ -1174,6 +1171,7 @@ def apply_watermark(video_path):
     wm_w = max(80, int(vw * WATERMARK_WIDTH_RATIO))
     x = int(vw * WATERMARK_MARGIN_RATIO)
     y = int(vh * WATERMARK_Y_RATIO)
+    ensure_file_unlocked(video_path)
     filt = (
         f"[1:v]scale={wm_w}:-1,format=rgba,"
         f"colorchannelmixer=aa={WATERMARK_OPACITY}[wm];"
@@ -1184,14 +1182,15 @@ def apply_watermark(video_path):
            "-filter_complex", filt,
            *video_encode_args(QUALITY), "-c:a", "copy", *METADATA_SCRUB,
            "-movflags", "+faststart", tmp_path]
-    result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                            timeout=1800)
-    if result.returncode == 0 and os.path.exists(tmp_path):
+    try:
+        run_ffmpeg_command(cmd, timeout=1800)
+        ensure_file_unlocked(tmp_path)
         if safe_replace(tmp_path, video_path):
+            ensure_file_unlocked(video_path)
             return True
-    err = (result.stderr or b"").decode(errors="ignore")[-300:]
-    print(f"   ⚠️ Watermark pass failed (clip kept unmarked): {err}")
-    safe_remove(tmp_path)
+    except Exception as e:
+        print(f"   ⚠️ Watermark pass failed (clip kept unmarked): {e}")
+    cleanup_temp_file(tmp_path)
     return False
 
 
@@ -1205,6 +1204,7 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
     engine only — the v1 loop below has no layout concept beyond its own
     classifier).
     """
+    ensure_file_unlocked(input_video)
     # v2 engine: analyze downscaled, render natively in ffmpeg. Any failure
     # falls back to the v1 frame loop below so a v2 edge case can't kill jobs.
     if os.environ.get("REFRAME_ENGINE", "v2").strip().lower() != "v1":
@@ -1237,7 +1237,7 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
         # isfile, not exists: a caller that hands us a directory should not
         # take an EACCES here, and must never have it deleted either.
         if os.path.isfile(stale):
-            safe_remove(stale)
+            cleanup_temp_file(stale)
 
     print(f"🎬 Processing clip: {input_video}")
     print("   Step 1: Detecting scenes...")
@@ -1246,9 +1246,8 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
     if not scenes:
         # Scene detection found nothing: treat the whole video as one scene.
         print("   ❌ No scenes were detected. Using full video as one scene.")
-        probe = cv2.VideoCapture(input_video)
-        span = int(probe.get(cv2.CAP_PROP_FRAME_COUNT))
-        probe.release()
+        with open_video_capture(input_video) as probe:
+            span = int(probe.get(cv2.CAP_PROP_FRAME_COUNT))
         from scenedetect import FrameTimecode
         scenes = [(FrameTimecode(0, fps), FrameTimecode(span, fps))]
 
@@ -1284,12 +1283,6 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
          *video_encode_args(QUALITY_FAST), '-an', silent_video_path],
         stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
-    reader = cv2.VideoCapture(input_video)
-    frame_total = int(reader.get(cv2.CAP_PROP_FRAME_COUNT))
-    
-    frame_number = 0
-    current_scene_index = 0
-    
     # Pre-calculate scene boundaries
     scene_boundaries = []
     for s_start, s_end in scenes:
@@ -1301,70 +1294,74 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
     # Per-stage wall time (server-side diagnostics; hidden from cloud logs).
     stage_seconds = {'detect': 0.0, 'write': 0.0}
     loop_started = time.time()
+    frame_number = 0
+    current_scene_index = 0
 
-    with tqdm(total=frame_total, desc="   Processing", file=sys.stdout) as pbar:
-        while reader.isOpened():
-            ret, frame = reader.read()
-            if not ret:
-                break
+    with open_video_capture(input_video) as reader:
+        frame_total = int(reader.get(cv2.CAP_PROP_FRAME_COUNT))
+        with tqdm(total=frame_total, desc="   Processing", file=sys.stdout) as pbar:
+            while reader.isOpened():
+                ret, frame = reader.read()
+                if not ret:
+                    break
 
-            # Update Scene Index
-            if current_scene_index < len(scene_boundaries):
-                start_f, end_f = scene_boundaries[current_scene_index]
-                if frame_number >= end_f and current_scene_index < len(scene_boundaries) - 1:
-                    current_scene_index += 1
-            
-            # Determine Strategy for current frame based on scene
-            current_strategy = scene_strategies[current_scene_index] if current_scene_index < len(scene_strategies) else 'TRACK'
-            
-            # Apply Strategy
-            if current_strategy == 'GENERAL':
-                # "Plano General" -> Blur Background + Fit Width
-                output_frame = create_general_frame(frame, OUTPUT_WIDTH, OUTPUT_HEIGHT)
+                # Update Scene Index
+                if current_scene_index < len(scene_boundaries):
+                    start_f, end_f = scene_boundaries[current_scene_index]
+                    if frame_number >= end_f and current_scene_index < len(scene_boundaries) - 1:
+                        current_scene_index += 1
                 
-                # Reset cameraman/tracker so they don't drift while inactive
-                cameraman.current_center_x = original_width / 2
-                cameraman.target_center_x = original_width / 2
+                # Determine Strategy for current frame based on scene
+                current_strategy = scene_strategies[current_scene_index] if current_scene_index < len(scene_strategies) else 'TRACK'
                 
-            else:
-                # "Single Speaker" -> Track & Crop
-
-                # Detect every Nth frame for performance (cameraman smooths in
-                # between); the much heavier YOLO fallback gets its own stride.
-                # Snap camera on scene change to avoid panning from previous scene position
-                is_scene_start = (frame_number == scene_boundaries[current_scene_index][0])
-                if is_scene_start and SCENE_CUT_RESET:
-                    speaker_tracker.reset()
-                    cameraman.begin_scene()
-
-                # Always detect on a cut, whatever the stride: the new shot's
-                # subject has to be found before the first frame is framed.
-                if frame_number % DETECT_STRIDE == 0 or (is_scene_start and SCENE_CUT_RESET):
-                    t_det = time.time()
-                    candidates = detect_face_candidates(frame)
-                    target_box = speaker_tracker.get_target(candidates, frame_number, original_width)
-                    if target_box:
-                        cameraman.update_target(target_box)
-                    elif frame_number % YOLO_FALLBACK_STRIDE == 0 or (is_scene_start and SCENE_CUT_RESET):
-                        person_box = detect_person_yolo(frame)
-                        if person_box:
-                            cameraman.update_target(person_box)
-                    stage_seconds['detect'] += time.time() - t_det
-
-                x1, y1, x2, y2 = cameraman.get_crop_box(force_snap=is_scene_start)
-
-                # Crop
-                if y2 > y1 and x2 > x1:
-                    cropped = frame[y1:y2, x1:x2]
-                    output_frame = cv2.resize(cropped, (OUTPUT_WIDTH, OUTPUT_HEIGHT), interpolation=cv2.INTER_LINEAR)
+                # Apply Strategy
+                if current_strategy == 'GENERAL':
+                    # "Plano General" -> Blur Background + Fit Width
+                    output_frame = create_general_frame(frame, OUTPUT_WIDTH, OUTPUT_HEIGHT)
+                    
+                    # Reset cameraman/tracker so they don't drift while inactive
+                    cameraman.current_center_x = original_width / 2
+                    cameraman.target_center_x = original_width / 2
+                    
                 else:
-                    output_frame = cv2.resize(frame, (OUTPUT_WIDTH, OUTPUT_HEIGHT), interpolation=cv2.INTER_LINEAR)
+                    # "Single Speaker" -> Track & Crop
 
-            t_wr = time.time()
-            encoder.stdin.write(output_frame.tobytes())
-            stage_seconds['write'] += time.time() - t_wr
-            frame_number += 1
-            pbar.update(1)
+                    # Detect every Nth frame for performance (cameraman smooths in
+                    # between); the much heavier YOLO fallback gets its own stride.
+                    # Snap camera on scene change to avoid panning from previous scene position
+                    is_scene_start = (frame_number == scene_boundaries[current_scene_index][0])
+                    if is_scene_start and SCENE_CUT_RESET:
+                        speaker_tracker.reset()
+                        cameraman.begin_scene()
+
+                    # Always detect on a cut, whatever the stride: the new shot's
+                    # subject has to be found before the first frame is framed.
+                    if frame_number % DETECT_STRIDE == 0 or (is_scene_start and SCENE_CUT_RESET):
+                        t_det = time.time()
+                        candidates = detect_face_candidates(frame)
+                        target_box = speaker_tracker.get_target(candidates, frame_number, original_width)
+                        if target_box:
+                            cameraman.update_target(target_box)
+                        elif frame_number % YOLO_FALLBACK_STRIDE == 0 or (is_scene_start and SCENE_CUT_RESET):
+                            person_box = detect_person_yolo(frame)
+                            if person_box:
+                                cameraman.update_target(person_box)
+                        stage_seconds['detect'] += time.time() - t_det
+
+                    x1, y1, x2, y2 = cameraman.get_crop_box(force_snap=is_scene_start)
+
+                    # Crop
+                    if y2 > y1 and x2 > x1:
+                        cropped = frame[y1:y2, x1:x2]
+                        output_frame = cv2.resize(cropped, (OUTPUT_WIDTH, OUTPUT_HEIGHT), interpolation=cv2.INTER_LINEAR)
+                    else:
+                        output_frame = cv2.resize(frame, (OUTPUT_WIDTH, OUTPUT_HEIGHT), interpolation=cv2.INTER_LINEAR)
+
+                t_wr = time.time()
+                encoder.stdin.write(output_frame.tobytes())
+                stage_seconds['write'] += time.time() - t_wr
+                frame_number += 1
+                pbar.update(1)
     
     loop_total = time.time() - loop_started
     other = loop_total - stage_seconds['detect'] - stage_seconds['write']
@@ -1376,7 +1373,6 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
     encoder.stdin.close()
     encode_log = encoder.stderr.read().decode()
     encoder.wait()
-    reader.release()
 
     if encoder.returncode != 0:
         print("\n   ❌ FFmpeg frame processing failed.")
@@ -1385,9 +1381,9 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
 
     print("\n   🔊 Step 5: Extracting audio...")
     try:
-        subprocess.run(
+        run_ffmpeg_command(
             ['ffmpeg', '-y', '-i', input_video, '-vn', '-c:a', 'copy', audio_track_path],
-            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            timeout=1800)
     except subprocess.CalledProcessError:
         print("\n   ❌ Audio extraction failed (maybe no audio?). Proceeding without audio.")
 
@@ -1397,15 +1393,16 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
         mux += ['-i', audio_track_path]
     mux += ['-c', 'copy', *METADATA_SCRUB, '-movflags', '+faststart', final_output_video]
     try:
-        subprocess.run(mux, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        run_ffmpeg_command(mux, timeout=1800)
+        ensure_file_unlocked(final_output_video)
         print(f"   ✅ Clip saved to {final_output_video}")
     except subprocess.CalledProcessError as e:
         print("\n   ❌ Final merge failed.")
-        print("   Stderr:", e.stderr.decode())
+        print("   Stderr:", e.stderr.decode() if e.stderr else "")
         return False
 
     for leftover in (silent_video_path, audio_track_path):
-        safe_remove(leftover)
+        cleanup_temp_file(leftover)
 
     return True
 
@@ -1882,12 +1879,11 @@ if __name__ == '__main__':
     # It runs before any render so the modules are switched on in time.
     if layout_picker.ENABLED:
         try:
-            _cap = cv2.VideoCapture(input_video)
-            _fps = _cap.get(cv2.CAP_PROP_FPS) or 30.0
-            _duration = int(_cap.get(cv2.CAP_PROP_FRAME_COUNT)) / _fps
-            _w = int(_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            _h = int(_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            _cap.release()
+            with open_video_capture(input_video) as _cap:
+                _fps = _cap.get(cv2.CAP_PROP_FPS) or 30.0
+                _duration = int(_cap.get(cv2.CAP_PROP_FRAME_COUNT)) / _fps
+                _w = int(_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                _h = int(_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             from reframe_v2 import source_already_fits  # imports main back
             # A source already shot vertical has no width to reorganise, and
             # the render passes it through whatever the model says. Asking
@@ -1912,11 +1908,10 @@ if __name__ == '__main__':
         render_clip(input_video, output_file, output_format)
     else:
         # Get duration (needed by both the transcript and the vision path).
-        cap = cv2.VideoCapture(input_video)
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        duration = frame_count / fps
-        cap.release()
+        with open_video_capture(input_video) as cap:
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            duration = frame_count / fps if fps else 0
 
         # 3. Transcribe — unless the video has no audio, in which case fall back
         # to Gemini vision (picks clips from the imagery instead of the speech).
@@ -2027,13 +2022,20 @@ if __name__ == '__main__':
                         clip_temp_path
                     ]
                     with CUT_LOCK:
-                        cut_proc = subprocess.run(cut_command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-                        if cut_proc.returncode != 0 or not os.path.exists(clip_temp_path) or os.path.getsize(clip_temp_path) == 0:
-                            err_msg = cut_proc.stderr.decode('utf-8', errors='replace') if cut_proc.stderr else 'Unknown cut error'
-                            print(f"   ❌ Cut failed for clip {i+1} (exit code {cut_proc.returncode}): {err_msg[:200]}")
+                        try:
+                            run_ffmpeg_command(cut_command)
+                        except subprocess.CalledProcessError as cut_err:
+                            err_msg = cut_err.stderr.decode('utf-8', errors='replace') if cut_err.stderr else 'Unknown cut error'
+                            print(f"   ❌ Cut failed for clip {i+1} (exit code {cut_err.returncode}): {err_msg[:200]}")
                             return False
 
+                    if not ensure_file_unlocked(clip_temp_path, timeout=15):
+                        print(f"   ❌ Cut file {clip_temp_path} is locked or empty!")
+                        return False
+
                     success = render_clip(clip_temp_path, clip_final_path, output_format)
+                    if success:
+                        ensure_file_unlocked(clip_final_path, timeout=15)
                     # Layer order: watermark burns into the canonical (so any
                     # later hook replacement, which re-derives from it, keeps
                     # the branding), the hook is a derived hooked_ file, and
@@ -2042,6 +2044,7 @@ if __name__ == '__main__':
                     # after the pool is race-free.
                     if success and os.environ.get("WATERMARK") == "1":
                         apply_watermark(clip_final_path)
+                        ensure_file_unlocked(clip_final_path, timeout=15)
                     deliver_path = clip_final_path
                     # Which stretches were stacked (SPLIT): captions go on the
                     # seam there, and /api/subtitle needs it again later.
@@ -2056,10 +2059,13 @@ if __name__ == '__main__':
                         hooked = auto_hook_clip(clip_final_path, clip)
                         if hooked:
                             deliver_path, clip['auto_hook'] = hooked
+                            ensure_file_unlocked(deliver_path, timeout=15)
                     if success:
                         captioned = auto_caption_clip(
                             deliver_path, transcript, start, end,
                             split_ranges=_layouts.split_ranges(clip['layout_ranges']))
+                        if captioned:
+                            ensure_file_unlocked(captioned, timeout=15)
                         print(f"   ✅ Clip {i+1} ready: {clip_final_path}")
                         # Hand the API the file to actually serve for this clip.
                         # Without it the status poller guesses the clean reframe
@@ -2073,7 +2079,7 @@ if __name__ == '__main__':
                               f"{os.path.basename(captioned or deliver_path)}")
                     return success
                 finally:
-                    safe_remove(clip_temp_path)
+                    cleanup_temp_file(clip_temp_path)
 
             clip_workers = max(int(os.environ.get("CLIP_WORKERS", "3")), 1)
             shorts = clips_data['shorts']
@@ -2102,7 +2108,7 @@ if __name__ == '__main__':
 
     # Clean up original if requested
     if args.url and not args.keep_original:
-        if safe_remove(input_video):
+        if cleanup_temp_file(input_video):
             print(f"🗑️  Cleaned up downloaded video.")
     # The job finished: a later run in this directory must transcribe afresh.
     if not args.skip_analysis:

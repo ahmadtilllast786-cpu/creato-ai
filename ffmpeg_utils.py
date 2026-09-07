@@ -14,6 +14,7 @@ import subprocess
 import threading
 import gc
 import time
+from contextlib import contextmanager
 
 # Quality tiers pinning the historical libx264 settings.
 QUALITY = "quality"            # was: -preset medium -crf 18
@@ -221,30 +222,81 @@ def escape_filter_value(value):
     return value.replace('\\', '/').replace(':', '\\:').replace("'", "\\'")
 
 
-def safe_remove(file_path: str, retries: int = 5, delay: float = 0.5) -> bool:
-    """Safely remove a file, retrying on transient Windows file locks (WinError 32).
-    Runs garbage collection to release unreferenced file handles and logs a warning
-    instead of raising an exception if removal fails.
-    """
-    if not file_path or not os.path.exists(file_path):
-        return True
-
-    for attempt in range(retries):
+def run_ffmpeg_command(cmd, timeout=None, **kwargs):
+    """Executes FFmpeg synchronously, ensuring all pipes and process handles are closed."""
+    kwargs.setdefault('stdout', subprocess.PIPE)
+    kwargs.setdefault('stderr', subprocess.PIPE)
+    with subprocess.Popen(cmd, **kwargs) as proc:
         try:
-            gc.collect()
-            os.remove(file_path)
-            return True
-        except PermissionError as e:
-            if attempt < retries - 1:
-                time.sleep(delay)
-            else:
-                print(f"⚠️ [SafeRemove] PermissionError deleting {file_path} after {retries} retries: {e}")
-        except FileNotFoundError:
-            return True
-        except Exception as e:
-            print(f"⚠️ [SafeRemove] Error deleting {file_path}: {e}")
-            return False
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            stdout, stderr = proc.communicate()
+            raise subprocess.TimeoutExpired(cmd, timeout, output=stdout, stderr=stderr)
+        except Exception:
+            proc.kill()
+            proc.wait()
+            raise
+        if proc.returncode != 0:
+            raise subprocess.CalledProcessError(proc.returncode, cmd, output=stdout, stderr=stderr)
+    return stdout
+
+
+@contextmanager
+def open_video_capture(path):
+    """Context manager for cv2.VideoCapture that guarantees the handle is closed
+    and garbage collected, preventing Windows WinError 32 file-locking issues.
+    """
+    import cv2
+    cap = cv2.VideoCapture(path)
+    try:
+        if not cap.isOpened():
+            raise IOError(f"Cannot open video: {path}")
+        yield cap
+    finally:
+        cap.release()
+        del cap
+        gc.collect()
+
+
+def ensure_file_unlocked(filepath, timeout=15):
+    """Blocks until the file is completely written and released by the writer."""
+    if not filepath:
+        return False
+    start = time.time()
+    while time.time() - start < timeout:
+        if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+            try:
+                # Attempt exclusive write/append access to confirm no other process is holding a handle
+                with open(filepath, 'a+b'):
+                    return True
+            except (PermissionError, IOError):
+                time.sleep(0.3)
+        else:
+            time.sleep(0.3)
     return False
+
+
+def cleanup_temp_file(filepath, retries=5, delay=0.5):
+    """Safely cleans up temporary files without aborting pipelines on transient locks."""
+    if not filepath or not os.path.exists(filepath):
+        return True
+    gc.collect()
+    for _ in range(retries):
+        try:
+            os.remove(filepath)
+            return True
+        except PermissionError:
+            time.sleep(delay)
+        except Exception as e:
+            print(f"⚠️ [Cleanup] Error removing {filepath}: {e}")
+            return False
+    print(f"⚠️ Deferred deletion: {filepath} is locked and will be purged in the next sweep")
+    return False
+
+
+# Backward compatibility alias
+safe_remove = cleanup_temp_file
 
 
 def safe_replace(src: str, dst: str, retries: int = 5, delay: float = 0.5) -> bool:
@@ -255,7 +307,7 @@ def safe_replace(src: str, dst: str, retries: int = 5, delay: float = 0.5) -> bo
         try:
             gc.collect()
             if os.path.exists(dst):
-                safe_remove(dst, retries=2, delay=0.2)
+                cleanup_temp_file(dst, retries=2, delay=0.2)
             os.replace(src, dst)
             return True
         except PermissionError as e:

@@ -33,6 +33,7 @@ import os
 import time
 
 import numpy as np
+from ffmpeg_utils import open_video_capture
 
 ENABLED = os.environ.get("SCREENCAST_LAYOUT", "0") == "1"
 
@@ -252,66 +253,63 @@ def detect_screencast_scenes(video_path, scenes, strategies, ranges, samples=6):
     import cv2
     import main as m
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        return {}
-
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
-    found = {}
-
     try:
-        for i, (start, end) in enumerate(scenes):
-            s_f, e_f = start.get_frames(), end.get_frames()
-            width = overlapping_width(s_f / fps, e_f / fps, ranges)
-            if not width:
-                continue
+        with open_video_capture(video_path) as cap:
+            fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+            frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+            found = {}
 
-            # Content that fills the frame has the presenter on top of it, so
-            # there is nothing to stack — just stop cropping the sides.
-            if width > STACK_MAX_WIDTH_FRACTION:
-                found[i] = ('WIDE', None)
-                continue
-
-            last_f = e_f - 1
-            if total_frames:
-                last_f = min(last_f, total_frames - 1)
-            if last_f < s_f:
-                continue
-
-            centres = []
-            for f_idx in np.linspace(s_f, last_f, samples):
-                cap.set(cv2.CAP_PROP_POS_FRAMES, int(round(f_idx)))
-                ok, frame = cap.read()
-                if not ok:
+            for i, (start, end) in enumerate(scenes):
+                s_f, e_f = start.get_frames(), end.get_frames()
+                width = overlapping_width(s_f / fps, e_f / fps, ranges)
+                if not width:
                     continue
-                centre = _face_centre(detect_faces_full_res(frame), frame_w)
-                if centre is None:
-                    # A presenter keyed into the corner of a screen recording is
-                    # often too small for BlazeFace even at full resolution
-                    # (measured: zero detections across an Excel walkthrough
-                    # where the person is plainly visible). YOLO finds the body
-                    # in the same frames, and a body centre frames the speaker
-                    # just as well for this layout.
-                    person = m.detect_person_yolo(frame)
-                    if person:
-                        centre = (person[0] + person[2] / 2.0,
-                                  person[1] + person[3] / 2.0)
-                if centre:
-                    centres.append(centre)
 
-            # Half the samples: a webcam inset is static and easy to find, so a
-            # weaker signal than this means there is no presenter to stack, and
-            # the content still deserves its full width.
-            if len(centres) < samples / 2.0:
-                found[i] = ('WIDE', None)
-                continue
+                # Content that fills the frame has the presenter on top of it, so
+                # there is nothing to stack — just stop cropping the sides.
+                if width > STACK_MAX_WIDTH_FRACTION:
+                    found[i] = ('WIDE', None)
+                    continue
 
-            found[i] = ('SCREENCAST',
-                        (float(np.median([c[0] for c in centres])),
-                         float(np.median([c[1] for c in centres]))))
-    finally:
-        cap.release()
+                last_f = e_f - 1
+                if total_frames:
+                    last_f = min(last_f, total_frames - 1)
+                if last_f < s_f:
+                    continue
 
-    return found
+                centres = []
+                for f_idx in np.linspace(s_f, last_f, samples):
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, int(round(f_idx)))
+                    ok, frame = cap.read()
+                    if not ok:
+                        continue
+                    centre = _face_centre(detect_faces_full_res(frame), frame_w)
+                    if centre is None:
+                        # A presenter keyed into the corner of a screen recording is
+                        # often too small for BlazeFace even at full resolution
+                        # (measured: zero detections across an Excel walkthrough
+                        # where the person is plainly visible). YOLO finds the body
+                        # in the same frames, and a body centre frames the speaker
+                        # just as well for this layout.
+                        person = m.detect_person_yolo(frame)
+                        if person:
+                            centre = (person[0] + person[2] / 2.0,
+                                      person[1] + person[3] / 2.0)
+                    if centre:
+                        centres.append(centre)
+
+                # Half the samples: a webcam inset is static and easy to find, so a
+                # weaker signal than this means there is no presenter to stack, and
+                # the content still deserves its full width.
+                if len(centres) < samples / 2.0:
+                    found[i] = ('WIDE', None)
+                    continue
+
+                found[i] = ('SCREENCAST',
+                            (float(np.median([c[0] for c in centres])),
+                             float(np.median([c[1] for c in centres]))))
+
+            return found
+    except (IOError, OSError):
+        return {}

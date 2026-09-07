@@ -25,7 +25,8 @@ import time
 import uuid
 
 from ffmpeg_utils import (METADATA_SCRUB, QUALITY_FAST, audio_encode_args,
-                          video_encode_args, safe_remove)
+                          video_encode_args, safe_remove, run_ffmpeg_command,
+                          ensure_file_unlocked, cleanup_temp_file, safe_replace)
 
 # EDL limits. Deliberately generous — the editor is for humans fixing cuts,
 # not for stitching feature films.
@@ -215,9 +216,13 @@ def concat_command(list_path, out_path):
 
 def run_cut_concat(input_path, segments, out_path, workdir, runner=None):
     """Cut every segment from ``input_path`` and join them into ``out_path``."""
+    if runner is None:
+        ensure_file_unlocked(input_path)
     run = runner or _run_ffmpeg
     if len(segments) == 1:
         run(cut_commands(input_path, segments, [out_path])[0])
+        if runner is None:
+            ensure_file_unlocked(out_path)
         return out_path
 
     # Unique per invocation: two concurrent recuts in the same job dir must
@@ -231,15 +236,20 @@ def run_cut_concat(input_path, segments, out_path, workdir, runner=None):
     try:
         for command in cut_commands(input_path, segments, part_paths):
             run(command)
+        if runner is None:
+            for part in part_paths:
+                ensure_file_unlocked(part)
         with open(list_path, "w") as f:
             for part in part_paths:
                 # Absolute paths: the concat demuxer resolves relative entries
                 # against the LIST FILE's directory, not the process cwd.
                 f.write(f"file '{os.path.abspath(part)}'\n")
         run(concat_command(list_path, out_path))
+        if runner is None:
+            ensure_file_unlocked(out_path)
     finally:
         for path in part_paths + [list_path]:
-            safe_remove(path)
+            cleanup_temp_file(path)
     return out_path
 
 
@@ -250,14 +260,12 @@ FFMPEG_TIMEOUT_SECONDS = 1800
 
 def _run_ffmpeg(command):
     try:
-        result = subprocess.run(
-            command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-            timeout=FFMPEG_TIMEOUT_SECONDS)
+        run_ffmpeg_command(command, timeout=FFMPEG_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         raise RuntimeError(
             f"ffmpeg timed out after {FFMPEG_TIMEOUT_SECONDS}s ({command[1:6]}...)")
-    if result.returncode != 0:
-        tail = (result.stderr or b"").decode("utf-8", "replace")[-400:]
+    except subprocess.CalledProcessError as e:
+        tail = (e.stderr or b"").decode("utf-8", "replace")[-400:] if isinstance(e.stderr, bytes) else str(e.stderr or "")[-400:]
         raise RuntimeError(f"ffmpeg failed ({command[1:6]}...): {tail}")
 
 
@@ -311,7 +319,11 @@ def perform_recut(*, input_path, segments, output_dir, clean_name,
             if not render(work_path, out_path, output_format):
                 raise RuntimeError("reframe failed on the recut clip")
         else:
-            shutil.move(work_path, out_path)
+            ensure_file_unlocked(work_path)
+            if not safe_replace(work_path, out_path):
+                shutil.move(work_path, out_path)
+            if runner is None:
+                ensure_file_unlocked(out_path)
             # No reframe means no fresh layout sidecar; the captions would fall
             # back to the bottom on a stacked clip. Carry the input's layout
             # ranges through the cut instead (empty when the input has none).
@@ -332,7 +344,7 @@ def perform_recut(*, input_path, segments, output_dir, clean_name,
                 served_name = os.path.basename(captioned)
         return served_name, out_name
     finally:
-        safe_remove(work_path)
+        cleanup_temp_file(work_path)
 
 
 def _main_attr(name):
