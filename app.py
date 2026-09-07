@@ -3184,8 +3184,18 @@ async def clip_auto_edit(
     # 1. Non-destructive: Preserve Stage 1 base cut
     clean_base = get_base_cut_filename(job_dir, filename)
     base_path = os.path.join(job_dir, clean_base)
-    if not os.path.exists(base_path):
-        base_path = os.path.join(job_dir, filename)
+    if not os.path.exists(base_path) or "subtitled_" in clean_base:
+        # Search for canonical clean cut *_clip_{clip_index+1}.mp4 without prefixes
+        canon_matches = sorted(glob.glob(os.path.join(job_dir, f"*_clip_{req.clip_index + 1}.mp4")))
+        clean_matches = [
+            c for c in canon_matches
+            if not any(os.path.basename(c).startswith(p) for p in ("subtitled_", "auto_edited_", "edited_"))
+        ]
+        if clean_matches:
+            base_path = clean_matches[0]
+            clean_base = os.path.basename(base_path)
+        elif not os.path.exists(base_path):
+            base_path = os.path.join(job_dir, filename)
 
     if not os.path.exists(base_path):
         # Fallback: find matching mp4 file
@@ -3199,7 +3209,14 @@ async def clip_auto_edit(
     if not clip.get('base_video_url'):
         clip['base_video_url'] = f"/videos/{req.job_id}/{os.path.basename(base_path)}"
 
-    had_captions = "subtitled_" in filename
+    had_captions = bool(
+        clip.get('had_captions')
+        or "subtitled_" in filename
+        or "subtitled_" in str(clip.get('video_url', ''))
+        or clip.get('subtitle_settings')
+    )
+    clip['had_captions'] = had_captions
+    base_already_has_captions = "subtitled_" in os.path.basename(base_path)
 
     # Output file for Stage 2 auto-edited version
     ts = int(time.time())
@@ -3277,7 +3294,11 @@ async def clip_auto_edit(
         sub_settings = edit_cfg.get("subtitle_settings") or clip.get("subtitle_settings")
         if not sub_settings:
             sub_settings = recover_existing_subtitle_settings(job_dir, req.clip_index)
-        if sub_settings:
+
+        # Do not burn a second subtitle layer if the input video already has burned subtitles
+        if base_already_has_captions:
+            edit_cfg["burn_subtitles"] = False
+        elif sub_settings:
             edit_cfg["subtitle_settings"] = sub_settings
             edit_cfg["burn_subtitles"] = True
         elif had_captions:
@@ -3296,7 +3317,8 @@ async def clip_auto_edit(
 
         result = await loop.run_in_executor(None, _do_auto_edit)
 
-        if not result.get("has_subtitles") and had_captions:
+        # Only reapply captions if the video did not already have them and auto_editor didn't burn them
+        if not base_already_has_captions and not result.get("has_subtitles") and had_captions:
             recap = await loop.run_in_executor(
                 None, _reapply_captions, req.job_id, req.clip_index, output_path)
             if recap:

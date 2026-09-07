@@ -249,13 +249,13 @@ def generate_subtitles_ass(
         return False
 
     sub_cfg = subtitle_settings or {}
-    font_name = sub_cfg.get("font_name") or font_name or "Arial"
+    font_name = sub_cfg.get("font_name") or font_name or "Impact"
     font_color = sub_cfg.get("font_color") or "#FFFFFF"
     border_color = sub_cfg.get("border_color") or "#000000"
-    border_width = float(sub_cfg.get("border_width", 3.5))
-    highlight_color = sub_cfg.get("highlight_color") or "#FFE500"
-    style_mode = str(sub_cfg.get("style", "classic")).lower()
-    uppercase = bool(sub_cfg.get("uppercase", False))
+    border_width = float(sub_cfg.get("border_width", 3.0))
+    highlight_color = sub_cfg.get("highlight_color") or "#FFD700"
+    style_mode = str(sub_cfg.get("style", "karaoke")).lower()
+    uppercase = bool(sub_cfg.get("uppercase", True) if "uppercase" in sub_cfg else True)
     position = str(sub_cfg.get("position", "bottom")).lower()
 
     # Scale font size if from 288p space
@@ -1550,8 +1550,9 @@ def auto_edit_clip(
             f.write("\n".join(lines) + "\n")
 
         # Step 4: Subtitle Timing Recalculation & Generation (Preserving Customizer Styles)
+        input_already_has_subtitles = "subtitled_" in os.path.basename(input_clip_path)
         has_subtitles = False
-        if cfg.burn_subtitles and transcript_words:
+        if not input_already_has_subtitles and cfg.burn_subtitles and transcript_words:
             # Exclude excised filler words from displayed captions
             active_words = transcript_words
             if cfg.filler_word_cutting and filler_intervals:
@@ -1662,10 +1663,10 @@ def auto_edit_clip(
 
         filter_parts = [base_video_filter_raw]
 
-        if cfg.burn_subtitles and has_subtitles and os.path.exists(ass_sub_path) and not (cfg.subtitles_style or subtitles_style):
+        if not input_already_has_subtitles and cfg.burn_subtitles and has_subtitles and os.path.exists(ass_sub_path) and not (cfg.subtitles_style or subtitles_style):
             esc_ass = escape_filter_value(ass_sub_path)
             filter_parts[0] += f"[v_zoomed];[v_zoomed]ass=filename='{esc_ass}'[vout]"
-        elif cfg.burn_subtitles and ((has_subtitles and os.path.exists(ass_sub_path)) or os.path.exists(srt_sub_path)):
+        elif not input_already_has_subtitles and cfg.burn_subtitles and ((has_subtitles and os.path.exists(ass_sub_path)) or os.path.exists(srt_sub_path)):
             target_sub = srt_sub_path if os.path.exists(srt_sub_path) else ass_sub_path
             esc_sub = escape_filter_value(target_sub)
             style_str = (
@@ -1793,7 +1794,7 @@ def auto_edit_clip(
             "filler_cuts": filler_cuts_count,
             "zooms_applied": zooms_applied_count > 0,
             "has_audio": val_info["has_audio"],
-            "has_subtitles": has_subtitles,
+            "has_subtitles": has_subtitles or input_already_has_subtitles,
             "duration": val_info["video_duration"] or (total_frames / fps if fps > 0 else duration),
             "config": asdict(cfg) if is_dataclass(cfg) else cfg,
         }

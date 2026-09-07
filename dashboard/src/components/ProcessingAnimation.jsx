@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Scan, Scissors, Activity, Radio, CheckCircle } from 'lucide-react';
+import { Scan, Scissors, Activity, Radio, CheckCircle, Play, Pause } from 'lucide-react';
 import { getApiUrl } from '../config';
 import { apiFetch } from '../lib/api';
 
 const ProcessingAnimation = ({ media, isComplete, syncedTime, isSyncedPlaying, syncTrigger }) => {
   const [videoSrc, setVideoSrc] = useState(null);
   const [isYouTube, setIsYouTube] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(true);
   const videoRef = useRef(null);
   const iframeRef = useRef(null);
 
@@ -89,6 +90,27 @@ const ProcessingAnimation = ({ media, isComplete, syncedTime, isSyncedPlaying, s
     return (match && match[2].length === 11) ? match[2] : null;
   };
 
+  const togglePlayPause = (e) => {
+    if (e) e.stopPropagation();
+    if (!isYouTube && videoRef.current) {
+      if (videoRef.current.paused) {
+        videoRef.current.play().then(() => setIsPlaying(true)).catch(err => console.log("Play failed", err));
+      } else {
+        videoRef.current.pause();
+        setIsPlaying(false);
+      }
+    } else if (isYouTube && iframeRef.current && videoSrc) {
+      const iframeWindow = iframeRef.current.contentWindow;
+      if (isPlaying) {
+        iframeWindow.postMessage(JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }), '*');
+        setIsPlaying(false);
+      } else {
+        iframeWindow.postMessage(JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*');
+        setIsPlaying(true);
+      }
+    }
+  };
+
   const containerClasses = `relative w-full aspect-[2/1] sm:aspect-video rounded-card overflow-hidden bg-black border border-rule2 mb-4 sm:mb-8 group animate-fade transition-all duration-500
     ${isComplete && !isSyncedPlaying ? 'grayscale brightness-50' : ''}
     ${isSyncedPlaying ? 'ring-2 ring-brass ring-offset-2 ring-offset-black' : ''}`;
@@ -117,11 +139,14 @@ const ProcessingAnimation = ({ media, isComplete, syncedTime, isSyncedPlaying, s
           <video
             ref={videoRef}
             src={videoSrc}
-            className="w-full h-full object-cover"
+            className="w-full h-full object-cover cursor-pointer"
             autoPlay
             muted
             loop
             playsInline
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
+            onClick={togglePlayPause}
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center bg-paper">
@@ -183,19 +208,38 @@ const ProcessingAnimation = ({ media, isComplete, syncedTime, isSyncedPlaying, s
            </div>
        )}
 
+       {/* Interactive Play/Pause Button for Main Screen Video */}
+       {videoSrc && (
+           <button
+             type="button"
+             onClick={togglePlayPause}
+             aria-label={isPlaying ? "Pause preview" : "Play preview"}
+             title={isPlaying ? "Pause preview" : "Play preview"}
+             className="absolute bottom-3 right-3 sm:bottom-4 sm:right-4 z-40 p-2 sm:p-2.5 rounded-full bg-black/80 hover:bg-black/95 text-white border border-white/20 hover:border-brass transition-all shadow-xl flex items-center justify-center pointer-events-auto backdrop-blur-sm group/btn active:scale-95"
+           >
+             {isPlaying ? (
+               <Pause size={15} className="text-white group-hover/btn:text-brass transition-colors" />
+             ) : (
+               <Play size={15} className="text-white group-hover/btn:text-brass transition-colors translate-x-0.5" />
+             )}
+           </button>
+       )}
+
        {/* Bottom Info Bar */}
       {!isSyncedPlaying && !isComplete && (
-          <div className="hidden sm:flex absolute bottom-0 left-0 right-0 p-4 bg-black/70 z-30 justify-between items-end border-t border-rule">
+          <div className="hidden sm:flex absolute bottom-0 left-0 right-0 p-4 bg-black/70 z-30 justify-between items-end border-t border-rule pointer-events-none">
               <div className="readout text-brass space-y-1">
                  <div className="flex items-center gap-2"><Activity size={10} className="animate-pulse" /> {'>'} ANALYSIS_THREAD_01: ACTIVE</div>
                  <div className="flex items-center gap-2"><Radio size={10} /> {'>'} AUDIO_TRANSCRIPT: PROCESSING</div>
               </div>
-              <div className="flex gap-1">
-                 <div className="w-1 h-3 bg-brass opacity-40 animate-[pulse_0.5s_infinite]"></div>
-                 <div className="w-1 h-5 bg-brass opacity-60 animate-[pulse_0.7s_infinite]"></div>
-                 <div className="w-1 h-2 bg-brass opacity-30 animate-[pulse_0.4s_infinite]"></div>
-                 <div className="w-1 h-4 bg-brass opacity-80 animate-[pulse_0.6s_infinite]"></div>
-                 <div className="w-1 h-3 bg-brass opacity-50 animate-[pulse_0.5s_infinite]"></div>
+              <div className="flex items-center gap-3 pr-14">
+                 <div className="flex gap-1">
+                    <div className="w-1 h-3 bg-brass opacity-40 animate-[pulse_0.5s_infinite]"></div>
+                    <div className="w-1 h-5 bg-brass opacity-60 animate-[pulse_0.7s_infinite]"></div>
+                    <div className="w-1 h-2 bg-brass opacity-30 animate-[pulse_0.4s_infinite]"></div>
+                    <div className="w-1 h-4 bg-brass opacity-80 animate-[pulse_0.6s_infinite]"></div>
+                    <div className="w-1 h-3 bg-brass opacity-50 animate-[pulse_0.5s_infinite]"></div>
+                 </div>
               </div>
           </div>
       )}

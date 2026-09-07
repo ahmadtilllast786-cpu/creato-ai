@@ -196,6 +196,48 @@ def build_transcript_windows(transcript_result, video_duration,
     return windows
 
 
+def _get_word_text(w):
+    return str(w.get("w") or w.get("word") or "").strip()
+
+
+def _is_sentence_start_word(words, idx, starts, ends):
+    """Returns True if the word at idx marks the start of a sentence or complete line."""
+    if idx == 0:
+        return True
+    prev_text = _get_word_text(words[idx - 1])
+    # Preceded by terminal punctuation
+    if any(prev_text.endswith(p) for p in (".", "?", "!", "…")):
+        return True
+    # Conversational pause of 300ms or more
+    gap = starts[idx] - ends[idx - 1]
+    if gap >= 0.30:
+        return True
+    # Capitalized word following a noticeable pause of 150ms or more
+    curr_text = _get_word_text(words[idx])
+    if curr_text and curr_text[0].isupper() and gap >= 0.15:
+        return True
+    return False
+
+
+def _is_sentence_end_word(words, idx, starts, ends):
+    """Returns True if the word at idx marks the conclusion of a sentence or complete thought."""
+    if idx == len(words) - 1:
+        return True
+    curr_text = _get_word_text(words[idx])
+    # Contains terminal punctuation
+    if any(curr_text.endswith(p) for p in (".", "?", "!", "…")):
+        return True
+    # Followed by conversational pause of 350ms or more
+    gap = starts[idx + 1] - ends[idx]
+    if gap >= 0.35:
+        return True
+    # Next word begins a capitalized sentence following a pause of 200ms or more
+    next_text = _get_word_text(words[idx + 1])
+    if next_text and next_text[0].isupper() and gap >= 0.20:
+        return True
+    return False
+
+
 def snap_clip_to_words(start, end, words, video_duration,
                        min_duration=15.0, max_duration=60.0,
                        search_window=1.5, max_lead=0.35, max_tail=0.45,
@@ -206,8 +248,10 @@ def snap_clip_to_words(start, end, words, video_duration,
     word-level timestamps are ground truth, so cuts land in pauses instead of
     mid-word.
 
-    Snaps start precisely to the first spoken word with a 150ms audio pre-roll buffer
-    so the opening syllable is preserved cleanly, prioritizing natural sentence/hook boundaries.
+    Snaps start precisely to the first spoken word of the sentence/line with a 150ms audio pre-roll buffer
+    so the opening syllable is preserved cleanly.
+    Snaps end precisely to the final spoken word of the sentence/line with terminal punctuation or pause,
+    guaranteeing clips never cut off mid-sentence.
 
     words: [{'w','s','e'}, ...] for the whole video, sorted by start.
     Returns (start, end); falls back to the input if no words are nearby or
@@ -217,34 +261,24 @@ def snap_clip_to_words(start, end, words, video_duration,
     if not words:
         return original
 
-    starts = [float(w.get("s", 0)) for w in words]
-    ends = [float(w.get("e", 0)) for w in words]
+    starts = [float(w.get("s", w.get("start", 0))) for w in words]
+    ends = [float(w.get("e", w.get("end", 0))) for w in words]
 
-    # START: snap to the nearest word start, then lead into silence with 150ms pre-roll.
+    # START: snap to real opening sentence and opening word
     new_start = float(start)
     candidates = [(i, s) for i, s in enumerate(starts) if abs(s - new_start) <= search_window]
     if candidates:
         best_idx, word_start = min(candidates, key=lambda pair: abs(pair[1] - new_start))
 
-        # Check if candidate is mid-sentence and there is an introductory hook/sentence start nearby
+        # Search for true sentence inception: look back up to 15 words or 4.0 seconds
         sentence_start_idx = best_idx
-        for back_idx in range(best_idx, max(-1, best_idx - 6), -1):
-            if back_idx == 0:
-                sentence_start_idx = 0
-                break
-            prev_w = words[back_idx - 1]
-            prev_text = str(prev_w.get("w", "")).strip()
-            prev_end = float(prev_w.get("e", 0))
-            # Preceding sentence punctuation or conversational pause >= 300ms
-            if any(prev_text.endswith(p) for p in (".", "?", "!")) or (starts[back_idx] - prev_end >= 0.30):
-                sentence_start_idx = back_idx
-                break
-            curr_text = str(words[back_idx].get("w", "")).strip()
-            if curr_text and curr_text[0].isupper() and (starts[back_idx] - prev_end >= 0.15):
+        for back_idx in range(best_idx, max(-1, best_idx - 16), -1):
+            if _is_sentence_start_word(words, back_idx, starts, ends):
                 sentence_start_idx = back_idx
                 break
 
-        if abs(starts[sentence_start_idx] - new_start) <= max(search_window, 2.5):
+        # If backwards search found a sentence start within allowable reach
+        if abs(starts[sentence_start_idx] - new_start) <= max(search_window, 4.0):
             best_idx = sentence_start_idx
             word_start = starts[best_idx]
 
@@ -256,15 +290,40 @@ def snap_clip_to_words(start, end, words, video_duration,
             lead = audio_pre_roll
         new_start = max(0.0, word_start - lead)
 
-    # END: snap to the nearest word end, then trail into the silence after it.
+    # END: snap to real ending sentence and ending word
     new_end = float(end)
-    candidates = [e for e in ends if abs(e - new_end) <= search_window]
-    if candidates:
-        word_end = min(candidates, key=lambda e: abs(e - new_end))
-        next_starts = [s for s in starts if s >= word_end]
-        if next_starts:
-            gap = max(0.0, min(next_starts) - word_end)
-            tail = min(max_tail, gap / 2)
+    end_candidates = [(i, e) for i, e in enumerate(ends) if abs(e - new_end) <= search_window]
+    if end_candidates:
+        best_end_idx, word_end = min(end_candidates, key=lambda pair: abs(pair[1] - new_end))
+
+        # Check if candidate is already a sentence conclusion
+        chosen_end_idx = best_end_idx
+        if not _is_sentence_end_word(words, best_end_idx, starts, ends):
+            # 1. First search forward to complete the sentence naturally
+            found_forward = False
+            for fwd_idx in range(best_end_idx, min(len(words), best_end_idx + 15)):
+                cand_end_t = ends[fwd_idx]
+                if cand_end_t - new_start > max_duration:
+                    break
+                if _is_sentence_end_word(words, fwd_idx, starts, ends):
+                    chosen_end_idx = fwd_idx
+                    found_forward = True
+                    break
+
+            # 2. If extending forward exceeds max_duration, search backwards for prior sentence conclusion
+            if not found_forward:
+                for back_idx in range(best_end_idx, max(-1, best_end_idx - 15), -1):
+                    cand_end_t = ends[back_idx]
+                    if cand_end_t - new_start < min_duration:
+                        break
+                    if _is_sentence_end_word(words, back_idx, starts, ends):
+                        chosen_end_idx = back_idx
+                        break
+
+        word_end = ends[chosen_end_idx]
+        if chosen_end_idx + 1 < len(starts):
+            gap = max(0.0, starts[chosen_end_idx + 1] - word_end)
+            tail = min(max_tail, max(0.15, gap * 0.7))
         else:
             tail = max_tail
         new_end = min(float(video_duration), word_end + tail)

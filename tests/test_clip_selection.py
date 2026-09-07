@@ -106,6 +106,36 @@ class TestSnapClipToWords:
         start, end = snap_clip_to_words(10.1, 30.0, words, 60.0)
         assert abs(start - 8.85) < 0.01
 
+    def test_sentence_boundary_ending_punctuation(self):
+        # Sentence starts at 0.0 ("Here"). Mid-sentence around 20.0, but sentence
+        # cleanly concludes at 21.5 with "money." followed by pause.
+        words = [_word("Here", 0.0, 0.4)] + [
+            _word(f"word{i}", 0.5 + i * 0.5, 0.9 + i * 0.5) for i in range(38)
+        ] + [
+            _word("make", 20.0, 20.4),
+            _word("money.", 20.6, 21.2),
+            _word("Next", 22.5, 22.9),
+            _word("topic", 23.0, 23.4)
+        ]
+        # Proposed end at 20.2 mid-sentence: should extend to "money." ending at 21.2 (+ tail into pause)
+        start, end = snap_clip_to_words(0.0, 20.2, words, 60.0)
+        assert end >= 21.2
+        assert end <= 22.5
+
+    def test_sentence_boundary_ending_pause(self):
+        # Sentence concludes without period but followed by long pause (0.6s) at 22.0
+        words = [_word("Start", 0.0, 0.4)] + [
+            _word(f"w{i}", 0.5 + i * 0.5, 0.9 + i * 0.5) for i in range(40)
+        ] + [
+            _word("concluding", 21.0, 21.5),
+            _word("thought", 21.6, 22.0),
+            _word("And", 22.8, 23.2),  # 0.8s gap
+        ]
+        start, end = snap_clip_to_words(0.0, 21.2, words, 60.0)
+        assert end >= 22.0
+        assert end <= 22.8
+
+
 
 class TestPricing:
     def test_known_models(self):
