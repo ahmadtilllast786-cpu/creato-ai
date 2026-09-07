@@ -1,3 +1,4 @@
+import ffmpeg_env
 import time
 import cv2
 import subprocess
@@ -1953,11 +1954,26 @@ if __name__ == '__main__':
                   f"switching to visual analysis.")
             transcript = None
 
-        # 4. Gemini Analysis (transcript-driven, or vision for silent videos)
-        if transcript is not None:
-            clips_data = get_viral_clips(transcript, duration)
-        else:
-            clips_data = get_visual_clips(input_video, duration)
+        # 4. Gemini Analysis (or reuse existing metadata if already generated)
+        metadata_file = os.path.join(output_dir, f"{video_title}_metadata.json")
+        clips_data = None
+        if os.path.exists(metadata_file) and os.path.getsize(metadata_file) > 0:
+            try:
+                with open(metadata_file, 'r') as f:
+                    cached = json.load(f)
+                if cached.get('shorts'):
+                    print(f"♻️ Reusing existing clip metadata ({len(cached['shorts'])} clips) — skipping LLM analysis.")
+                    clips_data = cached
+                    if transcript is None and cached.get('transcript'):
+                        transcript = cached['transcript']
+            except Exception:
+                clips_data = None
+
+        if clips_data is None:
+            if transcript is not None:
+                clips_data = get_viral_clips(transcript, duration)
+            else:
+                clips_data = get_visual_clips(input_video, duration)
 
         if not clips_data or 'shorts' not in clips_data:
             # Deliberately fail instead of reframing the whole video: that path
@@ -2053,15 +2069,22 @@ if __name__ == '__main__':
 
             clip_workers = max(int(os.environ.get("CLIP_WORKERS", "3")), 1)
             shorts = clips_data['shorts']
+            successful_clips = 0
             with ThreadPoolExecutor(max_workers=min(clip_workers, len(shorts))) as pool:
                 futures = {pool.submit(_process_one_clip, i, clip): i
                            for i, clip in enumerate(shorts)}
                 for future in as_completed(futures):
                     i = futures[future]
                     try:
-                        future.result()
+                        res = future.result()
+                        if res:
+                            successful_clips += 1
                     except Exception as e:
                         print(f"   ❌ Clip {i+1} failed: {type(e).__name__}: {e}")
+
+            if successful_clips == 0 and len(shorts) > 0:
+                print(f"❌ All {len(shorts)} clips failed during rendering!")
+                sys.exit(1)
 
             # Persist per-clip render results added by the workers (auto_hook)
             # so the editor can see what is already burned into each clip.

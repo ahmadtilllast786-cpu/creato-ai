@@ -1,3 +1,4 @@
+import ffmpeg_env
 import os
 import llm_backend
 import re
@@ -1898,11 +1899,21 @@ async def run_job(job_id, job_data):
                 clips = data.get('shorts', [])
                 cost_analysis = data.get('cost_analysis')
 
+                valid_clips = []
                 for i, clip in enumerate(clips):
                      clip_filename = _canonical_clip_file(output_dir, base_name, i)
-                     clip['video_url'] = f"/videos/{job_id}/{clip_filename}"
+                     clip_path = os.path.join(output_dir, clip_filename)
+                     if os.path.exists(clip_path) and os.path.getsize(clip_path) > 0:
+                         clip['video_url'] = f"/videos/{job_id}/{clip_filename}"
+                         valid_clips.append(clip)
+                     else:
+                         print(f"⚠️ Clip {i+1} ({clip_filename}) not found on disk at {clip_path}")
                 
-                jobs[job_id]['result'] = {'clips': clips, 'cost_analysis': cost_analysis}
+                if valid_clips:
+                    jobs[job_id]['result'] = {'clips': valid_clips, 'cost_analysis': cost_analysis}
+                else:
+                    jobs[job_id]['status'] = 'failed'
+                    jobs[job_id]['logs'].append("No video clips were successfully rendered on disk.")
             else:
                  jobs[job_id]['status'] = 'failed'
                  jobs[job_id]['logs'].append("No metadata file generated.")

@@ -1993,6 +1993,11 @@ function App() {
                       <div className="h-full min-h-[120px] flex flex-col items-center justify-center text-danger space-y-2">
                         <p>Generation failed.</p>
                       </div>
+                    ) : status === 'complete' || status === 'completed' ? (
+                      <div className="h-full min-h-[120px] flex flex-col items-center justify-center text-muted space-y-2 text-center p-4">
+                        <p className="text-ink font-medium">No clips were generated.</p>
+                        <p className="text-xs text-muted">Check the terminal logs or try another video.</p>
+                      </div>
                     ) : null
                   )}
                 </div>
