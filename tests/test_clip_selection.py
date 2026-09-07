@@ -86,6 +86,26 @@ class TestSnapClipToWords:
         start, end = snap_clip_to_words(0.0, 59.9, words, 80.0)
         assert end - start <= 60.0
 
+    def test_audio_pre_roll_buffer_applied(self):
+        # Word starts at 10.0 with ample preceding silence
+        words = [_word("Hello", 10.0, 10.5)] + [_word("world", 10.6 + i * 0.5, 11.0 + i * 0.5) for i in range(35)]
+        start, end = snap_clip_to_words(10.0, 30.0, words, 60.0)
+        # 10.0 - 0.150s pre-roll = 9.85s
+        assert abs(start - 9.85) < 0.01
+
+    def test_sentence_boundary_hook_start(self):
+        # Previous sentence ends at 8.0 with period. Mid-sentence word "because" at 10.0,
+        # but sentence inception "Wait" starts at 9.0.
+        words = [
+            _word("Done.", 7.5, 8.0),
+            _word("Wait", 9.0, 9.4),
+            _word("listen", 9.5, 9.8),
+            _word("carefully", 10.0, 10.4),
+        ] + [_word(f"w{i}", 11.0 + i * 0.5, 11.4 + i * 0.5) for i in range(35)]
+        # Proposed cut starts mid-sentence at 10.1: should snap back to "Wait" at 9.0 (with 150ms buffer: 8.85s)
+        start, end = snap_clip_to_words(10.1, 30.0, words, 60.0)
+        assert abs(start - 8.85) < 0.01
+
 
 class TestPricing:
     def test_known_models(self):

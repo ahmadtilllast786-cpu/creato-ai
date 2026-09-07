@@ -288,6 +288,7 @@ CLIP RULES:
 - THE 2-SECOND RULE: the clip MUST open on its strongest moment. If the first
   2 seconds would not stop a cold viewer from scrolling, move the start or skip the clip.
 - Start slightly before the hook and end slightly after the payoff when possible.
+- SCRIPT-AWARE HOOK: Detect strong introductory statements or conversational hook lines. Never start a clip mid-sentence or mid-action.
 - Do not cut in the middle of a word or phrase.
 - No generic intros/outros unless they are the hook.
 - STANDS ALONE: the clip must make sense to someone who has seen nothing else.

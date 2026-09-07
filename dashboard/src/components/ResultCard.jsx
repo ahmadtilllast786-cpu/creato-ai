@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp } from 'lucide-react';
+import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp, RotateCcw } from 'lucide-react';
 import { getApiUrl } from '../config';
 import { apiFetch } from '../lib/api';
 import SubtitleModal from './SubtitleModal';
@@ -200,6 +200,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     const [showHookModal, setShowHookModal] = useState(false);
     const [showTranslateModal, setShowTranslateModal] = useState(false);
     const [editError, setEditError] = useState(null);
+    const [isAutoEdited, setIsAutoEdited] = useState(() => Boolean(clip.is_auto_edited || (clip.video_url || '').includes('auto_edited') || (clip.video_url || '').includes('edited_')));
 
     const [clipDuration, setClipDuration] = useState(() => {
         const secs = clipDurationSeconds(clip);
@@ -282,48 +283,10 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
         setEditError(null);
         try {
             const apiKey = geminiApiKey || localStorage.getItem('gemini_key');
-
-            // Managed (paid) users get the Gemini key resolved server-side;
-            // only BYOK/self-host needs a local key.
-            if (!apiKey && !isManaged) {
-                throw new Error("Gemini API Key is missing. Please set it in Settings.");
-            }
             const geminiHeaders = apiKey ? { 'X-Gemini-Key': apiKey } : {};
 
-            // Try Remotion effects endpoint first
-            const effectsRes = hasServerBurns ? null : await apiFetch('/api/effects/generate', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    ...geminiHeaders
-                },
-                body: JSON.stringify({
-                    job_id: jobId,
-                    clip_index: index,
-                    input_filename: serverVideoFile
-                })
-            });
-
-            if (effectsRes && effectsRes.ok) {
-                const data = await effectsRes.json();
-                if (data.effects && data.effects.segments) {
-                    const newLayers = { ...activeLayers, effects: data.effects };
-                    setActiveLayers(newLayers);
-                    const blobUrl = await renderInBrowser({
-                        videoUrl: originalVideoUrl,
-                        durationInSeconds: clipDuration,
-                        subtitles: newLayers.subtitles,
-                        hook: newLayers.hook,
-                        effects: newLayers.effects,
-                    });
-                    setCurrentVideoUrl(blobUrl);
-                    if (videoRef.current) videoRef.current.load();
-                    return;
-                }
-            }
-
-            // Fallback: legacy FFmpeg edit endpoint
-            const res = await apiFetch('/api/edit', {
+            // Call Stage 2 on-demand Auto Edit endpoint (MediaPipe speaker tracking, dynamic zooms, silence trimming)
+            const res = await apiFetch('/api/clip/auto-edit', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -350,11 +313,52 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             if (data.new_video_url) {
                 setCurrentVideoUrl(getApiUrl(data.new_video_url));
                 setServerVideoFile(data.new_video_url.split('/').pop());
+                setIsAutoEdited(true);
                 if (videoRef.current) {
                     videoRef.current.load();
                 }
             }
 
+        } catch (e) {
+            setEditError(e.message);
+            setTimeout(() => setEditError(null), 5000);
+        } finally {
+            setIsEditing(false);
+        }
+    };
+
+    const handleRevertBase = async () => {
+        setIsEditing(true);
+        setEditError(null);
+        try {
+            const res = await apiFetch('/api/clip/revert-base', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    job_id: jobId,
+                    clip_index: index
+                })
+            });
+
+            if (!res.ok) {
+                const errText = await res.text();
+                try {
+                    const jsonErr = JSON.parse(errText);
+                    throw new Error(jsonErr.detail || errText);
+                } catch (e) {
+                    throw new Error(errText);
+                }
+            }
+
+            const data = await res.json();
+            if (data.new_video_url) {
+                setCurrentVideoUrl(getApiUrl(data.new_video_url));
+                setServerVideoFile(data.new_video_url.split('/').pop());
+                setIsAutoEdited(false);
+                if (videoRef.current) {
+                    videoRef.current.load();
+                }
+            }
         } catch (e) {
             setEditError(e.message);
             setTimeout(() => setEditError(null), 5000);
@@ -804,8 +808,8 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 {isEditing && (
                     <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center z-10 p-4 text-center">
                         <Loader2 size={28} className="text-brass animate-spin mb-3" />
-                        <span className="text-xs text-ink lowercase">ai magic in progress…</span>
-                        <span className="readout mt-1.5">APPLYING VIRAL EDITS · ZOOMS</span>
+                        <span className="text-xs text-ink lowercase">auto edit in progress…</span>
+                        <span className="readout mt-1.5">SPEAKER TRACKING · PACING CUTS · DYNAMIC ZOOMS</span>
                     </div>
                 )}
             </div>
@@ -896,10 +900,23 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                         onClick={handleAutoEdit}
                         disabled={isEditing}
                         className={QUIET_BTN}
+                        title="Stage 2 On-Demand Auto Edit (MediaPipe tracking, zooms, pacing cuts)"
                     >
                         {isEditing ? <Loader2 size={16} className="animate-spin text-brass shrink-0" /> : <Wand2 size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />}
                         {isEditing ? 'editing…' : 'auto edit'}
                     </button>
+
+                    {(isAutoEdited || clip.base_video_url) && (
+                        <button
+                            onClick={handleRevertBase}
+                            disabled={isEditing}
+                            className={QUIET_BTN}
+                            title="Revert to Stage 1 base cut"
+                        >
+                            <RotateCcw size={16} className="text-muted group-hover:text-brass transition-colors shrink-0" />
+                            revert base
+                        </button>
+                    )}
 
                     <button
                         onClick={() => setShowSubtitleModal(true)}

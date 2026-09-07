@@ -6,6 +6,7 @@ test environment, so no cloud auth or database is involved — which is itself
 the contract being tested: self-host must serve MCP without any of that.
 """
 import asyncio
+import pytest
 
 # Self-host mode is guaranteed by tests/conftest.py (BILLING_ENABLED=0), which
 # runs before any test module can import app.
@@ -101,6 +102,10 @@ class TestSelfHostQuota:
 class TestCloudModeAuth:
     """mcp_server reads BILLING_ENABLED per request (unlike app.py, which
     freezes it at import), so cloud-mode gating is testable by env patch."""
+
+    @pytest.fixture(autouse=True)
+    def _require_jwt(self):
+        pytest.importorskip("jwt")
 
     def test_401_without_credentials(self, monkeypatch):
         monkeypatch.setenv("BILLING_ENABLED", "1")

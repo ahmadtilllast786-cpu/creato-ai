@@ -493,6 +493,8 @@ def _canonical_clip_file(output_dir, base_name, index):
         derived = (glob.glob(os.path.join(output_dir, f"subtitled_*_{clean}"))
                    + glob.glob(os.path.join(output_dir, f"recut_*_{clean}"))
                    + glob.glob(os.path.join(output_dir, f"hooked_*_{clean}"))
+                   + glob.glob(os.path.join(output_dir, f"auto_edited_*_{clean}"))
+                   + glob.glob(os.path.join(output_dir, f"edited_*_{clean}"))
                    + glob.glob(os.path.join(output_dir, f"hook_{clean}")))
     except Exception:
         derived = []
@@ -526,6 +528,27 @@ def _strip_burned_hook(output_dir, filename):
         if not m or not os.path.exists(os.path.join(output_dir, m.group(1))):
             return filename
         filename = m.group(1)
+
+
+def _strip_auto_edited(output_dir, filename):
+    """Walk ``auto_edited_<ts>_`` / ``edited_<ts>_`` prefixes back to the base cut."""
+    while True:
+        m = re.match(r'^(?:auto_edited_\d+_|auto_edited_|edited_\d+_|edited_)(.+)$', filename)
+        if not m or not os.path.exists(os.path.join(output_dir, m.group(1))):
+            return filename
+        filename = m.group(1)
+
+
+def get_base_cut_filename(output_dir, filename):
+    """Strips subtitles, hooks, and auto_edited derivations to yield the Stage 1 base cut."""
+    f = filename
+    prev = None
+    while f != prev:
+        prev = f
+        f = _strip_burned_captions(output_dir, f)
+        f = _strip_burned_hook(output_dir, f)
+        f = _strip_auto_edited(output_dir, f)
+    return f
 
 
 def _reapply_captions(job_id, clip_index, video_path):
@@ -2938,11 +2961,181 @@ from translate import translate_video, get_supported_languages
 from thumbnail import (analyze_video_for_titles, refine_titles, generate_thumbnail,
                        generate_youtube_description, extract_face_frames)
 
+class AutoEditRequest(BaseModel):
+    job_id: str
+    clip_index: int
+    input_filename: Optional[str] = None
+    max_zoom: Optional[float] = 1.20
+
+
+class RevertBaseRequest(BaseModel):
+    job_id: str
+    clip_index: int
+
+
 class EditRequest(BaseModel):
     job_id: str
     clip_index: int
     api_key: Optional[str] = None
     input_filename: Optional[str] = None
+    mode: Optional[str] = None
+    max_zoom: Optional[float] = 1.20
+
+
+@app.post("/api/clip/auto-edit")
+async def clip_auto_edit(
+    req: AutoEditRequest,
+    request: Request,
+):
+    await _ensure_job_files(req.job_id, request)
+    if req.job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = jobs[req.job_id]
+    await _assert_job_owner(request, job)
+    if 'result' not in job or 'clips' not in job['result']:
+        raise HTTPException(status_code=400, detail="Job result not available")
+    if req.clip_index >= len(job['result']['clips']):
+        raise HTTPException(status_code=400, detail="Invalid clip index")
+
+    clip = job['result']['clips'][req.clip_index]
+    job_dir = os.path.join(OUTPUT_DIR, req.job_id)
+
+    if req.input_filename:
+        filename = os.path.basename(req.input_filename)
+    else:
+        filename = os.path.basename(clip['video_url'])
+
+    # 1. Non-destructive: Preserve Stage 1 base cut
+    clean_base = get_base_cut_filename(job_dir, filename)
+    base_path = os.path.join(job_dir, clean_base)
+    if not os.path.exists(base_path):
+        base_path = os.path.join(job_dir, filename)
+
+    if not clip.get('base_video_url'):
+        clip['base_video_url'] = f"/videos/{req.job_id}/{os.path.basename(base_path)}"
+
+    had_captions = "subtitled_" in filename
+
+    # Output file for Stage 2 auto-edited version
+    ts = int(time.time())
+    edited_filename = f"auto_edited_{ts}_{clean_base}"
+    output_path = os.path.join(job_dir, edited_filename)
+
+    transcript_words = None
+    try:
+        meta_files = glob.glob(os.path.join(job_dir, "*_metadata.json"))
+        if meta_files:
+            with open(meta_files[0], 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+                transcript_words = (meta.get('transcript') or {}).get('words')
+    except Exception as e:
+        print(f"⚠️ Could not load transcript words for auto edit: {e}")
+
+    try:
+        import auto_editor
+        loop = asyncio.get_event_loop()
+
+        def _do_auto_edit():
+            return auto_editor.auto_edit_clip(
+                input_clip_path=base_path,
+                output_clip_path=output_path,
+                transcript_words=transcript_words,
+                max_zoom=req.max_zoom or 1.20
+            )
+
+        result = await loop.run_in_executor(None, _do_auto_edit)
+
+        if had_captions:
+            recap = await loop.run_in_executor(
+                None, _reapply_captions, req.job_id, req.clip_index, output_path)
+            if recap:
+                edited_filename = os.path.basename(recap)
+
+        new_video_url = f"/videos/{req.job_id}/{edited_filename}"
+        clip['video_url'] = new_video_url
+        clip['is_auto_edited'] = True
+
+        # Persist in metadata.json
+        try:
+            meta_files = glob.glob(os.path.join(job_dir, "*_metadata.json"))
+            if meta_files:
+                with open(meta_files[0], 'r', encoding='utf-8') as f:
+                    meta = json.load(f)
+                shorts = meta.get('shorts', [])
+                if req.clip_index < len(shorts):
+                    shorts[req.clip_index]['video_url'] = new_video_url
+                    shorts[req.clip_index]['base_video_url'] = clip['base_video_url']
+                    shorts[req.clip_index]['is_auto_edited'] = True
+                    meta['shorts'] = shorts
+                    with open(meta_files[0], 'w', encoding='utf-8') as f:
+                        json.dump(meta, f, indent=4)
+        except Exception as e:
+            print(f"⚠️ Failed to update metadata.json: {e}")
+
+        _archive_clip_edit_bg(req.job_id, req.clip_index, edited_filename)
+
+        return {
+            "success": True,
+            "new_video_url": new_video_url,
+            "base_video_url": clip['base_video_url'],
+            "is_auto_edited": True,
+            "details": result
+        }
+
+    except Exception as e:
+        print(f"❌ Auto Edit Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/clip/revert-base")
+async def clip_revert_base(
+    req: RevertBaseRequest,
+    request: Request,
+):
+    await _ensure_job_files(req.job_id, request)
+    if req.job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = jobs[req.job_id]
+    await _assert_job_owner(request, job)
+    if 'result' not in job or 'clips' not in job['result']:
+        raise HTTPException(status_code=400, detail="Job result not available")
+    if req.clip_index >= len(job['result']['clips']):
+        raise HTTPException(status_code=400, detail="Invalid clip index")
+
+    clip = job['result']['clips'][req.clip_index]
+    job_dir = os.path.join(OUTPUT_DIR, req.job_id)
+
+    base_url = clip.get('base_video_url')
+    if not base_url:
+        curr_file = os.path.basename(clip['video_url'])
+        clean_base = get_base_cut_filename(job_dir, curr_file)
+        base_url = f"/videos/{req.job_id}/{clean_base}"
+
+    clip['video_url'] = base_url
+    clip['is_auto_edited'] = False
+
+    try:
+        meta_files = glob.glob(os.path.join(job_dir, "*_metadata.json"))
+        if meta_files:
+            with open(meta_files[0], 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+            shorts = meta.get('shorts', [])
+            if req.clip_index < len(shorts):
+                shorts[req.clip_index]['video_url'] = base_url
+                shorts[req.clip_index]['is_auto_edited'] = False
+                meta['shorts'] = shorts
+                with open(meta_files[0], 'w', encoding='utf-8') as f:
+                    json.dump(meta, f, indent=4)
+    except Exception as e:
+        print(f"⚠️ Failed to update metadata.json on revert: {e}")
+
+    return {
+        "success": True,
+        "new_video_url": base_url,
+        "is_auto_edited": False
+    }
 
 @app.post("/api/edit")
 async def edit_clip(
@@ -2955,8 +3148,16 @@ async def edit_clip(
     body_key = None if BILLING_ENABLED else req.api_key
     final_api_key = body_key or await resolve_gemini(request)
 
-    if not final_api_key:
-        raise gemini_missing_error()
+    if not final_api_key or req.mode == "auto_edit":
+        return await clip_auto_edit(
+            AutoEditRequest(
+                job_id=req.job_id,
+                clip_index=req.clip_index,
+                input_filename=req.input_filename,
+                max_zoom=req.max_zoom or 1.20,
+            ),
+            request
+        )
 
     await _ensure_job_files(req.job_id, request)
     if req.job_id not in jobs:

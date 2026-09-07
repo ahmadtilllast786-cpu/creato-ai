@@ -198,12 +198,16 @@ def build_transcript_windows(transcript_result, video_duration,
 
 def snap_clip_to_words(start, end, words, video_duration,
                        min_duration=15.0, max_duration=60.0,
-                       search_window=1.5, max_lead=0.35, max_tail=0.45):
+                       search_window=1.5, max_lead=0.35, max_tail=0.45,
+                       audio_pre_roll=0.150):
     """
     Snap Gemini-proposed clip boundaries onto real word boundaries plus a bit
     of the surrounding silence. LLMs are bad at millisecond arithmetic; the
     word-level timestamps are ground truth, so cuts land in pauses instead of
     mid-word.
+
+    Snaps start precisely to the first spoken word with a 150ms audio pre-roll buffer
+    so the opening syllable is preserved cleanly, prioritizing natural sentence/hook boundaries.
 
     words: [{'w','s','e'}, ...] for the whole video, sorted by start.
     Returns (start, end); falls back to the input if no words are nearby or
@@ -216,17 +220,40 @@ def snap_clip_to_words(start, end, words, video_duration,
     starts = [float(w.get("s", 0)) for w in words]
     ends = [float(w.get("e", 0)) for w in words]
 
-    # START: snap to the nearest word start, then lead into the silence before it.
+    # START: snap to the nearest word start, then lead into silence with 150ms pre-roll.
     new_start = float(start)
-    candidates = [s for s in starts if abs(s - new_start) <= search_window]
+    candidates = [(i, s) for i, s in enumerate(starts) if abs(s - new_start) <= search_window]
     if candidates:
-        word_start = min(candidates, key=lambda s: abs(s - new_start))
-        prev_ends = [e for e in ends if e <= word_start]
-        if prev_ends:
-            gap = max(0.0, word_start - max(prev_ends))
-            lead = min(max_lead, gap / 2)
+        best_idx, word_start = min(candidates, key=lambda pair: abs(pair[1] - new_start))
+
+        # Check if candidate is mid-sentence and there is an introductory hook/sentence start nearby
+        sentence_start_idx = best_idx
+        for back_idx in range(best_idx, max(-1, best_idx - 6), -1):
+            if back_idx == 0:
+                sentence_start_idx = 0
+                break
+            prev_w = words[back_idx - 1]
+            prev_text = str(prev_w.get("w", "")).strip()
+            prev_end = float(prev_w.get("e", 0))
+            # Preceding sentence punctuation or conversational pause >= 300ms
+            if any(prev_text.endswith(p) for p in (".", "?", "!")) or (starts[back_idx] - prev_end >= 0.30):
+                sentence_start_idx = back_idx
+                break
+            curr_text = str(words[back_idx].get("w", "")).strip()
+            if curr_text and curr_text[0].isupper() and (starts[back_idx] - prev_end >= 0.15):
+                sentence_start_idx = back_idx
+                break
+
+        if abs(starts[sentence_start_idx] - new_start) <= max(search_window, 2.5):
+            best_idx = sentence_start_idx
+            word_start = starts[best_idx]
+
+        # Snap start time with 150ms audio pre-roll buffer to preserve opening syllable cleanly
+        if best_idx > 0:
+            gap = max(0.0, word_start - ends[best_idx - 1])
+            lead = audio_pre_roll if gap >= audio_pre_roll else min(audio_pre_roll, gap * 0.8)
         else:
-            lead = max_lead
+            lead = audio_pre_roll
         new_start = max(0.0, word_start - lead)
 
     # END: snap to the nearest word end, then trail into the silence after it.
