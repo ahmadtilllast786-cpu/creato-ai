@@ -8,6 +8,7 @@ import sys
 import threading
 import unicodedata
 import uuid
+import tempfile
 import gc
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from scenedetect import open_video, SceneManager

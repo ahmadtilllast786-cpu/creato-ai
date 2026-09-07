@@ -53,3 +53,32 @@ class TestEdges:
     def test_zero_duration_does_not_divide_by_zero(self):
         assert main.speech_is_sparse(_t("hi"), 0)
         assert not main.speech_is_sparse(_t(*["a b c d e f g h i j"] * 3), 0)
+
+
+class TestVisualProxy:
+    def test_create_visual_proxy_success(self, monkeypatch):
+        created_paths = []
+
+        def mock_run_ffmpeg(cmd, timeout=600):
+            target = cmd[-1]
+            with open(target, "wb") as f:
+                f.write(b"mock_video_bytes")
+            created_paths.append(target)
+
+        monkeypatch.setattr(main, "run_ffmpeg_command", mock_run_ffmpeg)
+        try:
+            res = main._create_visual_proxy("dummy_original.mp4")
+            assert res != "dummy_original.mp4"
+            assert res in created_paths
+            assert main.os.path.exists(res)
+        finally:
+            for p in created_paths:
+                main.cleanup_temp_file(p)
+
+    def test_create_visual_proxy_failure_falls_back(self, monkeypatch):
+        def mock_run_ffmpeg(cmd, timeout=600):
+            raise RuntimeError("ffmpeg crashed")
+
+        monkeypatch.setattr(main, "run_ffmpeg_command", mock_run_ffmpeg)
+        res = main._create_visual_proxy("dummy_original.mp4")
+        assert res == "dummy_original.mp4"
