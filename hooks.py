@@ -189,15 +189,13 @@ def download_font_if_needed():
 
 # Hook visual styles. Each maps to box fill (RGBA, alpha 0 = no box), text
 # color, and an optional text outline (color, px) for box-less looks.
+# These 6 styles are a CONTRACT with the frontend (HookModal picker and
+# HookOverlay's HOOK_LOOKS must mirror these keys exactly).
 HOOK_STYLES = {
     # Black card, white text (User requested default: sleek high-contrast look).
     "classic": {"box": (18, 18, 20, 240),     "text": (255, 255, 255), "outline": None, "shadow": True},
     # Dark card, white text.
     "dark":    {"box": (18, 18, 20, 235),     "text": (255, 255, 255), "outline": None, "shadow": True},
-    # Explicit black & white alias.
-    "black_white": {"box": (18, 18, 20, 240), "text": (255, 255, 255), "outline": None, "shadow": True},
-    # White card, black serif text.
-    "white_card": {"box": (255, 255, 255, 240), "text": (0, 0, 0), "outline": None, "shadow": True},
     # Bright yellow card, black text (high-contrast TikTok look).
     "yellow":  {"box": (255, 214, 0, 245),   "text": (0, 0, 0), "outline": None, "shadow": True},
     # Red "breaking" card, white text.
