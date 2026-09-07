@@ -25,13 +25,13 @@ import numpy as np
 
 ENABLED = os.environ.get("PUNCH_IN", "0") == "1"
 
-# Peak zoom. 1.12 crops 11% off each dimension: visible as intent, still short
+# Peak zoom. 1.15 crops ~13% off each dimension: visible as intent, still short
 # of cutting into a head framed by the TRACK crop.
-MAX_ZOOM = float(os.environ.get("PUNCH_IN_ZOOM", "1.12"))
+MAX_ZOOM = float(os.environ.get("PUNCH_IN_ZOOM", "1.15"))
 
-# Envelope, in seconds: snap in, sit there, drift out.
+# Envelope, in seconds: snap in, sit there (held 2-3s), drift out.
 RISE_SECONDS = 0.25
-HOLD_SECONDS = 1.30
+HOLD_SECONDS = 2.50
 FALL_SECONDS = 0.55
 
 # Never punch twice inside this window. Two pushes in quick succession read as a
@@ -41,22 +41,8 @@ FALL_SECONDS = 0.55
 BEAT_WINDOW = 0.2
 
 # A beat must exceed the clip's median loudness by this much of the gap to its
-# peak. Low values punch on every syllable; this keeps it to real emphasis.
-#
-# These two were shipped at 4.0/0.45 and that produced 8.4 punches per minute of
-# clip, one every seven seconds. That is not a push on the beat, it is a twitch.
-# Swept over 20 corpus clips (31-jul-2026), punches per minute, median and max:
-#
-#   gap  prom    median  max          gap  prom    median  max
-#   4.0  0.45       8.4  11.8        12.0  0.60       2.9   4.6
-#   4.0  0.75       2.4   5.8        18.0  0.45       2.9   3.9
-#   8.0  0.60       3.4   5.9        18.0  0.60       2.8   3.0
-#
-# 18.0/0.60 is picked for having the tightest spread, not just the right median:
-# a setting whose worst case is 3.0/min never surprises anyone, while 12.0/0.60
-# has the same median but can still reach 4.6 on a loud clip. No setting left a
-# clip with zero punches.
-MIN_GAP_SECONDS = 18.0
+# peak. 12.0s gap provides 3-5 punches per minute broadcast cadence.
+MIN_GAP_SECONDS = 12.0
 BEAT_PROMINENCE = 0.60
 
 

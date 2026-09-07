@@ -272,7 +272,7 @@ class TestAudioAndStreamValidation:
 class TestAutoEditConfig:
     def test_default_config(self):
         cfg = get_auto_edit_config()
-        assert cfg.max_zoom == 1.20
+        assert cfg.max_zoom == 1.15
         assert cfg.speaker_tracking is True
         assert cfg.tilt_headroom_ratio == 0.33
         assert cfg.jump_cut_disguises is True

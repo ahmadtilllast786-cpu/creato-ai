@@ -10,6 +10,7 @@ from ffmpeg_utils import (
     METADATA_SCRUB,
     QUALITY,
     QUALITY_FAST,
+    BROADCAST,
     mark_ai_generated,
     reset_encoder_cache,
     video_encode_args,
@@ -37,6 +38,9 @@ def test_default_args_pin_historical_x264_settings():
         "-c:v", "libx264", "-preset", "fast", "-crf", "18"]
     assert video_encode_args(DELIVERY) == [
         "-c:v", "libx264", "-preset", "fast", "-crf", "22"]
+    assert video_encode_args(BROADCAST) == [
+        "-c:v", "libx264", "-preset", "slow", "-crf", "18", "-pix_fmt", "yuv420p",
+        "-b:v", "8M", "-maxrate", "12M", "-bufsize", "16M"]
 
 
 def test_unknown_tier_raises():

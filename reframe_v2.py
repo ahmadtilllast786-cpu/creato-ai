@@ -28,7 +28,7 @@ import screencast_layout
 import layout_ranges
 import split_layout
 from ffmpeg_utils import (video_encode_args, escape_filter_value, QUALITY_FAST,
-                          METADATA_SCRUB, run_ffmpeg_command, open_video_capture,
+                          BROADCAST, METADATA_SCRUB, run_ffmpeg_command, open_video_capture,
                           ensure_file_unlocked, cleanup_temp_file)
 
 ANALYSIS_MAX_WIDTH = 640
@@ -285,11 +285,18 @@ def apply_crop_overrides(xs, strategies, scene_boundaries, overrides,
 
 
 def _analyze_trajectory(input_video, scenes_boundaries, scene_strategies,
-                        fps, orig_w, orig_h, cameraman, tracker):
-    """Replays v1's per-frame decision loop on a downscaled ffmpeg-decoded
-    stream. Returns xs: crop x per frame (None on GENERAL frames)."""
+                        fps, orig_w, orig_h, cameraman, tracker,
+                        three_zone_engine=None):
+    """Analyzes the downscaled video stream and produces the camera trajectory.
+    Uses Rule of Thirds / 3-Zone Dynamic Framing Engine by default.
+    Returns xs: crop x per frame (None on GENERAL frames)."""
     import numpy as np
     import main as m
+    import three_zone_framing as tzf
+
+    use_three_zone = os.environ.get("THREE_ZONE_FRAMING", "1") != "0"
+    if use_three_zone and three_zone_engine is None:
+        three_zone_engine = tzf.DirectorMultiCameraEngine(orig_w, orig_h, fps=fps)
 
     small_w = min(ANALYSIS_MAX_WIDTH, orig_w)
     if small_w % 2:
@@ -309,6 +316,7 @@ def _analyze_trajectory(input_video, scenes_boundaries, scene_strategies,
     xs = []
     frame_number = 0
     current_scene_index = 0
+    candidates = []
     try:
         while True:
             buf = proc.stdout.read(frame_bytes)
@@ -342,6 +350,8 @@ def _analyze_trajectory(input_video, scenes_boundaries, scene_strategies,
                     # (see SmoothedCameraman.begin_scene).
                     tracker.reset()
                     cameraman.begin_scene()
+                    if three_zone_engine:
+                        three_zone_engine.reset()
 
                 if frame_number % m.DETECT_STRIDE == 0 or cut:
                     candidates = m.detect_face_candidates(frame)
@@ -354,9 +364,21 @@ def _analyze_trajectory(input_video, scenes_boundaries, scene_strategies,
                     elif frame_number % m.YOLO_FALLBACK_STRIDE == 0 or cut:
                         person_box = m.detect_person_yolo(frame)
                         if person_box:
-                            cameraman.update_target([int(v * scale) for v in person_box])
+                            scaled_box = [int(v * scale) for v in person_box]
+                            cameraman.update_target(scaled_box)
+                            candidates = [{'box': scaled_box, 'score': 1000}]
 
-                x1, _y1, _x2, _y2 = cameraman.get_crop_box(force_snap=is_scene_start)
+                if use_three_zone and three_zone_engine:
+                    x1, _y1, _cw, _ch = three_zone_engine.update_frame(
+                        frame_idx=frame_number,
+                        face_candidates=candidates if candidates else None,
+                        frame_image=frame,
+                        force_snap=is_scene_start
+                    )
+                    cameraman.current_center_x = x1 + cameraman.crop_width / 2.0
+                    cameraman.target_center_x = cameraman.current_center_x
+                else:
+                    x1, _y1, _x2, _y2 = cameraman.get_crop_box(force_snap=is_scene_start)
                 xs.append(x1)
 
             frame_number += 1
@@ -604,14 +626,14 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
                 graph = (
                     f"[0:v]sendcmd=f='{escape_filter_value(cmd_path)}',"
                     f"crop@c={init},"
-                    f"scale={out_w}:{out_h},setsar=1[v]"
+                    f"scale={out_w}:{out_h}:flags=lanczos,unsharp=5:5:0.5:5:5:0.0,setsar=1[v]"
                 )
 
             _run([
                 "ffmpeg", "-y", "-loglevel", "error",
                 "-ss", f"{ss:.4f}", "-t", f"{dur:.4f}", "-i", input_video,
                 "-filter_complex", graph, "-map", "[v]",
-                *video_encode_args(QUALITY_FAST), "-an", seg_path,
+                *video_encode_args(BROADCAST), "-an", seg_path,
             ])
             segments.append(seg_path)
 

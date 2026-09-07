@@ -20,11 +20,14 @@ from contextlib import contextmanager
 QUALITY = "quality"            # was: -preset medium -crf 18
 QUALITY_FAST = "quality_fast"  # was: -preset fast -crf 18
 DELIVERY = "delivery"          # was: -preset fast -crf 22
+BROADCAST = "broadcast"        # broadcast master: -preset slow -crf 18 -b:v 8M -maxrate 12M -bufsize 16M
 
 _X264_ARGS = {
     QUALITY: ["-c:v", "libx264", "-preset", "medium", "-crf", "18"],
     QUALITY_FAST: ["-c:v", "libx264", "-preset", "fast", "-crf", "18"],
     DELIVERY: ["-c:v", "libx264", "-preset", "fast", "-crf", "22"],
+    BROADCAST: ["-c:v", "libx264", "-preset", "slow", "-crf", "18", "-pix_fmt", "yuv420p",
+                "-b:v", "8M", "-maxrate", "12M", "-bufsize", "16M"],
 }
 
 # NVENC -cq is not 1:1 with x264 CRF: benchmarked on the prod GPU (RTX 4000
@@ -43,6 +46,9 @@ _NVENC_ARGS = {
     DELIVERY: ["-c:v", "h264_nvenc", "-preset", "p4",
                "-rc", "vbr", "-cq", "29", "-b:v", "0", "-spatial-aq", "1",
                "-pix_fmt", "yuv420p"],
+    BROADCAST: ["-c:v", "h264_nvenc", "-preset", "p6", "-tune", "hq",
+                "-rc", "vbr", "-cq", "18", "-b:v", "8M", "-maxrate", "12M", "-bufsize", "16M",
+                "-spatial-aq", "1", "-temporal-aq", "1", "-pix_fmt", "yuv420p"],
 }
 
 # Output args that drop container/stream metadata carried over from the source

@@ -33,6 +33,8 @@ from ffmpeg_utils import (
     open_video_capture,
     escape_filter_value,
     format_ffmpeg_error,
+    video_encode_args,
+    BROADCAST,
     METADATA_SCRUB,
 )
 
@@ -451,9 +453,9 @@ BREATH_MARGIN_SECONDS = 0.06  # 60ms natural breath padding around speech
 SILENCE_NOISE_DB = -30.0
 
 # Dynamic zoom defaults
-DEFAULT_MAX_ZOOM = 1.20     # Centered between 1.15x and 1.25x
+DEFAULT_MAX_ZOOM = 1.15     # Restricted to 1.15x for broadcast quality
 RISE_SECONDS = 0.25
-HOLD_SECONDS = 1.40
+HOLD_SECONDS = 2.50         # Held 2-3s
 FALL_SECONDS = 0.55
 
 # Analysis width for fast MediaPipe face tracking
@@ -468,18 +470,18 @@ class AutoEditConfig:
     # 1. Dynamic Camera Movements, Reframing & Stabilization
     speaker_tracking: bool = True
     camera_stabilization: bool = True
-    deadzone_ratio: float = 0.06  # 5-8% frame deadzone threshold (eliminates micro-jitter/shaking)
-    ema_alpha: float = 0.12  # Exponential moving average smoothing (~0.1-0.15)
+    deadzone_ratio: float = 0.12  # 12% frame deadzone threshold (eliminates micro-jitter/shaking)
+    ema_alpha: float = 0.10  # Exponential moving average smoothing (~0.10)
     pan_window_frames: int = 19  # Smooth pan transitions across 15-20 frames
     tilt_headroom_ratio: float = 0.33  # Golden-ratio headroom (~33% from top of crop box)
     punch_in_zooms: bool = True
-    max_zoom: float = 1.20  # 1.15x - 1.25x
-    zoom_cadence_mode: str = "controlled"  # 'controlled' (strictly 4-6x per minute) or 'legacy'
+    max_zoom: float = 1.15  # Restricted to 1.15x for broadcast standard
+    zoom_cadence_mode: str = "controlled"  # 'controlled' (strictly 3-5x per minute) or 'legacy'
     min_zoom_cooldown_s: float = 8.0  # At least 8s cooldown between dynamic zoom events
-    zoom_hold_s: float = 2.5  # Hold zoom for 2.0 to 3.5 seconds
-    max_zooms_per_minute: int = 6
-    min_zooms_per_minute: int = 4
-    ken_burns_drift: bool = True  # Subtle drift (auto-muted during controlled cadence mode)
+    zoom_hold_s: float = 2.5  # Hold zoom for 2.0 to 3.0 seconds
+    max_zooms_per_minute: int = 5
+    min_zooms_per_minute: int = 3
+    ken_burns_drift: bool = True  # Muted in controlled mode to eliminate continuous creeping zoom
     ken_burns_rate: float = 0.0025
     multi_speaker_mode: str = "auto"  # 'auto', 'single', 'switch'
     depth_of_field_blur: bool = False
@@ -502,8 +504,8 @@ class AutoEditConfig:
     anchor: str = "center"  # 'center', 'top', 'bottom', 'custom'
 
     # 4. Visual Cuts & Transitions
-    jump_cut_disguises: bool = True  # Alternate framing (wide vs medium-close) across cuts
-    motion_transitions: bool = True  # Directional whip-pan / push offsets at cuts
+    jump_cut_disguises: bool = True
+    motion_transitions: bool = True
 
     # 5. Color, Lighting & Visual Polish
     visual_polish: bool = True
@@ -917,7 +919,8 @@ def track_active_speaker(
                     best_cand = None
                     best_score = -1.0
 
-                    # Find dominant speaker
+                    # Find dominant speaker with strong sticky continuity
+                    sticky_radius = max(20.0, orig_w * 0.18)
                     for det in results.detections:
                         bbox = det.location_data.relative_bounding_box
                         area = bbox.width * bbox.height
@@ -926,10 +929,12 @@ def track_active_speaker(
                         dist = abs(cand_cx - last_cx) + abs(cand_cy - last_cy)
 
                         # Balance speaker face size with camera tracking continuity
+                        # Give strong sticky bonus (+500.0) if close to current speaker to prevent jumping in groups
+                        sticky_bonus = 500.0 if dist <= sticky_radius else 0.0
                         if multi_speaker_mode == "switch":
-                            score = area * 1200.0 - dist * 0.05
+                            score = area * 1200.0 - dist * 0.05 + sticky_bonus * 0.5
                         else:
-                            score = area * 1000.0 - dist * 0.15
+                            score = area * 1000.0 - dist * 0.15 + sticky_bonus
 
                         if score > best_score:
                             best_score = score
@@ -994,18 +999,18 @@ def compute_contextual_zooms(
     zoom_cadence_mode: str = "controlled",
     min_zoom_cooldown_s: float = 8.0,
     zoom_hold_s: float = 2.5,
-    max_zooms_per_minute: int = 6,
-    min_zooms_per_minute: int = 4,
+    max_zooms_per_minute: int = 5,
+    min_zooms_per_minute: int = 3,
     keywords: Optional[Any] = None,
 ) -> List[float]:
     """Compute per-frame zoom factors (1.0 to max_zoom).
     In 'controlled' mode:
-    - Dynamic zooms strictly frequency-capped to 4 to 6 times per minute (~one every 10-15s).
+    - Dynamic zooms strictly frequency-capped to 3 to 5 times per minute (~one every 12-20s).
     - Minimum 8s cooldown between successive zoom events.
     - Trigger only on high-emphasis keywords, exclamations/questions, whisper/volume velocity, or opening hook.
-    - Held for 2.0-4.0s (default 2.5s) then smoothly eased back down to 1.0x with smoothstep easing.
+    - Held for 2.0-3.0s (default 2.5s) then smoothly eased back down to 1.0x with smoothstep easing.
     """
-    max_zoom = min(max(max_zoom, 1.15), 1.25)
+    max_zoom = min(max(max_zoom, 1.10), 1.25)
     zooms = [1.0] * max(0, n_frames)
     if not zooms or fps <= 0:
         return zooms
@@ -1019,9 +1024,9 @@ def compute_contextual_zooms(
     # 1. Candidate extraction: (timestamp, priority_score, label)
     candidates: List[Tuple[float, float, str]] = []
 
-    # Opening hook punch-in: first 0.6s
-    if duration >= 4.0:
-        candidates.append((0.6, 100.0, "hook"))
+    # Opening hook punch-in: first 0.6s (only when transcript words are not provided or no words exist)
+    if duration >= 4.0 and not transcript_words:
+        candidates.append((0.6, 75.0, "hook"))
 
     # Audio energy emphasis beats
     if video_path and os.path.exists(video_path):
@@ -1075,7 +1080,7 @@ def compute_contextual_zooms(
             if not clusters:
                 clusters.append([cand])
             else:
-                if cand[0] - clusters[-1][-1][0] < min_zoom_cooldown_s:
+                if cand[0] - clusters[-1][0][0] < min_zoom_cooldown_s:
                     clusters[-1].append(cand)
                 else:
                     clusters.append([cand])
@@ -1093,17 +1098,6 @@ def compute_contextual_zooms(
             if t - last_t >= min_zoom_cooldown_s:
                 selected_times.append(t)
                 last_t = t
-                if len(selected_times) >= max_allowed:
-                    break
-
-        # If below min_target, synthesize evenly-spaced zoom points
-        if len(selected_times) < min_target:
-            step = duration / (min_target + 1)
-            for i in range(1, min_target + 1):
-                synth_t = round(i * step, 2)
-                if 1.0 <= synth_t <= duration - 2.0:
-                    if all(abs(synth_t - st) >= min_zoom_cooldown_s for st in selected_times):
-                        selected_times.append(synth_t)
                 if len(selected_times) >= max_allowed:
                     break
 
@@ -1155,10 +1149,10 @@ def compute_camera_choreography(
     transcript_words: Optional[List[Dict[str, Any]]] = None,
     max_zoom: float = DEFAULT_MAX_ZOOM,
     punch_in_zooms: bool = True,
-    jump_cut_disguises: bool = True,
-    ken_burns_drift: bool = True,
+    jump_cut_disguises: bool = False,
+    ken_burns_drift: bool = False,
     ken_burns_rate: float = 0.0025,
-    motion_transitions: bool = True,
+    motion_transitions: bool = False,
     zoom_cadence_mode: str = "controlled",
     min_zoom_cooldown_s: float = 8.0,
     zoom_hold_s: float = 2.5,
@@ -1249,8 +1243,11 @@ def generate_zoom_boxes(
     headroom_ratio: float = 0.33,
     x_offsets: Optional[List[int]] = None
 ) -> List[Tuple[int, int, int, int]]:
-    """Calculate per-frame (crop_w, crop_h, crop_x, crop_y) with golden-ratio headroom positioning.
+    """Calculate per-frame (crop_w, crop_h, crop_x, crop_y) with face anchored at center.
     All dimensions and offsets are strictly even.
+    When z <= 1.001: full frame (orig_w, orig_h, 0, 0).
+    When z > 1.001: zooms symmetrically into the face, keeping the face centered
+    on screen with zero vertical jumping or horizontal sliding.
     """
     boxes: List[Tuple[int, int, int, int]] = []
     n = min(len(centers), len(zooms))
@@ -1258,6 +1255,10 @@ def generate_zoom_boxes(
 
     for i in range(n):
         z = zooms[i]
+        if z <= 1.001:
+            boxes.append((orig_w, orig_h, 0, 0))
+            continue
+
         w = int(orig_w / z)
         h = int(orig_h / z)
         w -= w % 2
@@ -1266,9 +1267,8 @@ def generate_zoom_boxes(
         h = max(2, min(h, orig_h))
 
         cx, cy = centers[i]
+        # Keep face centered horizontally
         x = int(round(cx - w / 2.0)) + offsets[i]
-        # Golden ratio headroom positioning:
-        # Places face center at headroom_ratio (~33%) from top of crop box
         y = int(round(cy - h * headroom_ratio))
 
         # Clamp within video bounds
@@ -1664,7 +1664,7 @@ def auto_edit_clip(
             fg_filters = [
                 f"sendcmd=f='{escape_filter_value(cmd_file_path)}'",
                 f"crop@c={init_crop}",
-                f"scale={fg_w}:{fg_h}:flags=lanczos",
+                f"scale={fg_w}:{fg_h}:flags=lanczos,unsharp=5:5:0.5:5:5:0.0",
                 "setsar=1",
             ]
             bg_filter = "[in_bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=brightness=-0.08[bg]"
@@ -1689,7 +1689,7 @@ def auto_edit_clip(
             video_filters = [
                 f"sendcmd=f='{escape_filter_value(cmd_file_path)}'",
                 f"crop@c={init_crop}",
-                "scale=1080:1920:flags=lanczos",
+                "scale=1080:1920:flags=lanczos,unsharp=5:5:0.5:5:5:0.0",
                 "setsar=1",
             ]
             if cfg.visual_polish:
@@ -1789,7 +1789,7 @@ def auto_edit_clip(
             *input_args,
             "-filter_complex", filter_graph,
             *map_args,
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+            *video_encode_args(BROADCAST),
             *audio_args,
             *METADATA_SCRUB,
             output_clip_path
@@ -1819,7 +1819,7 @@ def auto_edit_clip(
                     *input_args,
                     "-filter_complex", filter_graph_fallback,
                     *map_args,
-                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+                    *video_encode_args(BROADCAST),
                     *audio_args,
                     *METADATA_SCRUB,
                     output_clip_path

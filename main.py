@@ -29,8 +29,8 @@ import hook_grounding
 import layout_picker
 import llm_backend
 from clip_selection import (build_transcript_windows, clip_count_targets,
-                            clip_duration_bounds, snap_clip_to_words,
-                            trim_to_best)
+                            clip_duration_bounds, get_heuristic_clips,
+                            snap_clip_to_words, trim_to_best)
 from ffmpeg_utils import (video_encode_args, audio_encode_args, QUALITY,
                           QUALITY_FAST, METADATA_SCRUB, safe_remove, safe_replace,
                           run_ffmpeg_command, open_video_capture, ensure_file_unlocked,
@@ -1233,21 +1233,22 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
     """
     ensure_file_unlocked(input_video)
 
-    # Legacy crop engine or manual scene crop overrides from editor UI
-    if crop_overrides or os.environ.get("REFRAME_STYLE", "").strip().lower() == "crop":
+    reframe_style = os.environ.get("REFRAME_STYLE", "3zone").strip().lower()
+    # Intelligent 3-Zone Dynamic Framing engine (or manual scene crop overrides from editor UI)
+    if crop_overrides or reframe_style not in ("blur_bg", "blurred", "blur"):
         try:
             import reframe_v2
             t0 = time.time()
             result = reframe_v2.render(input_video, final_output_video, aspect_ratio,
                                        force_strategy=force_strategy,
                                        crop_overrides=crop_overrides)
-            print(f"   ⏱️ Reframe crop total: {time.time() - t0:.1f}s")
+            print(f"   ⏱️ 3-Zone dynamic reframe total: {time.time() - t0:.1f}s")
             return result
         except Exception as e:
             if crop_overrides:
                 raise RuntimeError(
                     f"manual framing needs crop reframe, which failed ({type(e).__name__}: {e})") from e
-            print(f"   ⚠️ Reframe crop failed ({type(e).__name__}: {e}) — falling back to blurred background fill")
+            print(f"   ⚠️ 3-Zone dynamic reframe failed ({type(e).__name__}: {e}) — falling back to blurred background fill")
 
     t0 = time.time()
     print(f"🎬 Reframing with Blurred Background Fill (1080x1920): {input_video}")
@@ -1708,7 +1709,6 @@ def get_viral_clips(transcript_result, video_duration):
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
             print("⚠️ Notice: GEMINI_API_KEY not found in environment. Seamlessly generating clips via intelligent transcript analysis.")
-            from clip_selection import get_heuristic_clips, clip_duration_bounds
             min_secs, max_secs = clip_duration_bounds()
             return get_heuristic_clips(transcript_result, video_duration, min_secs=min_secs, max_secs=max_secs)
         client = genai.Client(api_key=api_key)
@@ -1817,7 +1817,6 @@ def get_viral_clips(transcript_result, video_duration):
     except Exception as e:
         print(f"❌ Gemini Error: {e}")
         print("⚠️ Seamlessly falling back to intelligent transcript analysis...")
-        from clip_selection import get_heuristic_clips, clip_duration_bounds
         min_secs, max_secs = clip_duration_bounds()
         return get_heuristic_clips(transcript_result, video_duration, min_secs=min_secs, max_secs=max_secs)
 
@@ -2153,7 +2152,6 @@ if __name__ == '__main__':
         if not clips_data or 'shorts' not in clips_data:
             if (transcript and transcript.get('segments')) or (raw_transcript and raw_transcript.get('segments')):
                 print("⚠️ Falling back to transcript heuristic analysis for clip generation.")
-                from clip_selection import get_heuristic_clips, clip_duration_bounds
                 min_secs, max_secs = clip_duration_bounds()
                 clips_data = get_heuristic_clips(transcript or raw_transcript, duration, min_secs=min_secs, max_secs=max_secs)
                 if transcript is None:

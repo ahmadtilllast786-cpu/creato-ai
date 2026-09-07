@@ -3162,6 +3162,7 @@ class EditRequest(BaseModel):
 
 
 @app.post("/api/clip/auto-edit")
+@app.post("/api/clip/auto_edit")
 async def clip_auto_edit(
     req: AutoEditRequest,
     request: Request,
@@ -3475,6 +3476,7 @@ async def extract_metadata_endpoint(
 
 
 @app.post("/api/clip/revert-base")
+@app.post("/api/clip/revert_base")
 async def clip_revert_base(
     req: RevertBaseRequest,
     request: Request,
