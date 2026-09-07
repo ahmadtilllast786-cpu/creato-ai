@@ -1711,14 +1711,41 @@ def get_viral_clips(transcript_result, video_duration):
 # is ~120-160 words/min; below these floors there is nothing to clip by words.
 MIN_SPEECH_WORDS_PER_MIN = float(os.environ.get("MIN_SPEECH_WORDS_PER_MIN", "5"))
 MIN_SPEECH_WORDS = int(os.environ.get("MIN_SPEECH_WORDS", "8"))
+MIN_TOTAL_SPEECH_WORDS = int(os.environ.get("MIN_TOTAL_SPEECH_WORDS", "30"))
 
 
 def speech_is_sparse(transcript, duration):
     """True when the transcript is too thin to drive clip selection."""
     words = sum(len((seg.get("text") or "").split())
                 for seg in (transcript or {}).get("segments", []))
+    if words >= MIN_TOTAL_SPEECH_WORDS:
+        # A long video with 30+ spoken words across multiple sentences has plenty
+        # of dialogue to select clips from. It should never be treated as "silent".
+        return False
     minutes = max(float(duration or 0) / 60.0, 1e-6)
     return words < MIN_SPEECH_WORDS or words / minutes < MIN_SPEECH_WORDS_PER_MIN
+
+
+def _create_visual_proxy(video_path):
+    """Creates a fast, highly-compressed 1-fps 480p proxy for Gemini Vision.
+    Gemini Vision only samples at 1 fps anyway, so sending a full-res multi-GB
+    video wastes bandwidth and causes timeouts/503 errors."""
+    proxy_path = os.path.join(tempfile.gettempdir(), f"gemini_proxy_{uuid.uuid4().hex[:8]}.mp4")
+    cmd = [
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-i", video_path,
+        "-vf", "scale=480:-2,fps=1",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "32",
+        "-an", proxy_path
+    ]
+    try:
+        run_ffmpeg_command(cmd, timeout=600)
+        if os.path.exists(proxy_path) and os.path.getsize(proxy_path) > 0:
+            return proxy_path
+    except Exception as e:
+        print(f"⚠️ Proxy creation failed ({e}) — uploading original file.")
+        cleanup_temp_file(proxy_path)
+    return video_path
 
 
 def get_visual_clips(video_path, video_duration, language="en"):
@@ -1737,12 +1764,15 @@ def get_visual_clips(video_path, video_duration, language="en"):
         return None
     client = genai.Client(api_key=api_key)
     model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
-    print(f"🎥  Model: {model_name} | uploading {os.path.basename(video_path)}…")
+    
+    upload_file_path = _create_visual_proxy(video_path)
+    is_temp_proxy = (upload_file_path != video_path)
+    print(f"🎥  Model: {model_name} | uploading {os.path.basename(upload_file_path)}…")
 
     file_upload = None
     try:
-        file_upload = client.files.upload(file=video_path)
-        deadline = time.time() + 180
+        file_upload = client.files.upload(file=upload_file_path)
+        deadline = time.time() + 300
         while True:
             info = client.files.get(name=file_upload.name)
             state = str(getattr(getattr(info, "state", info), "name", "")).upper()
@@ -1774,9 +1804,30 @@ def get_visual_clips(video_path, video_duration, language="en"):
             response_mime_type="application/json",
             response_schema=gemini_worker.VisualResponse,
         )
-        response = client.models.generate_content(
-            model=model_name, contents=[file_upload, prompt], config=config)
-        gemini_worker.raise_if_blocked(response)
+        response = None
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                response = client.models.generate_content(
+                    model=model_name, contents=[file_upload, prompt], config=config)
+                gemini_worker.raise_if_blocked(response)
+                break
+            except gemini_worker.GeminiBlockedError:
+                raise
+            except Exception as e:
+                msg = str(e)
+                transient = any(tok in msg for tok in (
+                    '503', 'UNAVAILABLE', '429', 'RESOURCE_EXHAUSTED',
+                    '500', 'INTERNAL', 'overloaded', 'Deadline'))
+                if attempt == max_attempts or not transient:
+                    print(f"❌ Gemini vision error: {e}")
+                    return None
+                wait = 2 ** attempt
+                print(f"⚠️ Gemini vision busy ({e}) — retrying in {wait}s...")
+                time.sleep(wait)
+
+        if response is None:
+            return None
         parsed = json.loads(response.text)
         shorts = parsed.get("shorts") or []
         # Clamp to the real duration; drop anything degenerate.
@@ -1809,6 +1860,8 @@ def get_visual_clips(video_path, video_duration, language="en"):
                 client.files.delete(name=file_upload.name)
             except Exception:
                 pass
+        if is_temp_proxy:
+            cleanup_temp_file(upload_file_path)
 
 
 if __name__ == '__main__':
@@ -1945,6 +1998,7 @@ if __name__ == '__main__':
 
         # Music-only or wordless footage transcribes to a handful of words.
         # Clip it by what is on screen instead, like a video with no audio.
+        raw_transcript = transcript
         if transcript is not None and speech_is_sparse(transcript, duration):
             n_words = sum(len((sg.get("text") or "").split()) for sg in transcript["segments"])
             print(f"🔇 Only {n_words} word(s) of speech in {duration:.0f}s — "
@@ -1971,6 +2025,11 @@ if __name__ == '__main__':
                 clips_data = get_viral_clips(transcript, duration)
             else:
                 clips_data = get_visual_clips(input_video, duration)
+                # Fall back to transcript if visual analysis returned no clips but speech exists
+                if (not clips_data or 'shorts' not in clips_data) and raw_transcript and raw_transcript.get('segments'):
+                    print("⚠️ Vision pass returned no clips — falling back to transcript speech segments.")
+                    clips_data = get_viral_clips(raw_transcript, duration)
+                    transcript = raw_transcript
 
         if not clips_data or 'shorts' not in clips_data:
             # Deliberately fail instead of reframing the whole video: that path

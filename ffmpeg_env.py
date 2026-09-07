@@ -6,6 +6,16 @@ import os
 import sys
 import shutil
 
+# Force UTF-8 across all streams and Python subprocesses on Windows to prevent log mojibake / glitches
+os.environ["PYTHONUTF8"] = "1"
+os.environ["PYTHONIOENCODING"] = "utf-8"
+for _stream in (sys.stdout, sys.stderr, sys.stdin):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 def setup_ffmpeg_path():
     venv_dir = os.path.dirname(sys.executable)
     candidates = [

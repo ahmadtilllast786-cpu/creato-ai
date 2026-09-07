@@ -1,5 +1,6 @@
 from reframe_v2 import (
     DELIVERY_MIN_WIDTH,
+    coalesce_render_ranges,
     concat_list_content,
     dedupe_sendcmd_lines,
     delivery_size,
@@ -171,3 +172,19 @@ class TestVerticalSource:
             graph = general_filtergraph(1080, 1920, orig_w=1080, orig_h=orig_h)
             h = int(graph.split("[fga]scale=-2:")[1].split(",")[0])
             assert h % 2 == 0, (orig_h, h)
+
+
+def test_coalesce_render_ranges():
+    # Consecutive TRACK scenes merge into a single continuous render range
+    ranges = [(0, 100, 'TRACK'), (100, 250, 'TRACK'), (250, 400, 'GENERAL'), (400, 500, 'TRACK')]
+    coalesced = coalesce_render_ranges(ranges)
+    assert coalesced == [(0, 250, 'TRACK'), (250, 400, 'GENERAL'), (400, 500, 'TRACK')]
+
+    # All TRACK scenes merge into a single range
+    all_track = [(0, 50, 'TRACK'), (50, 100, 'TRACK'), (100, 200, 'TRACK')]
+    assert coalesce_render_ranges(all_track) == [(0, 200, 'TRACK')]
+
+    # SPLIT scenes with per-scene splits are not merged
+    splits = {50: ((100, 200), (300, 400))}
+    ranges_with_split = [(0, 50, 'TRACK'), (50, 100, 'SPLIT'), (100, 200, 'TRACK')]
+    assert coalesce_render_ranges(ranges_with_split, splits=splits) == ranges_with_split

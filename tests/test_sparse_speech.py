@@ -36,6 +36,12 @@ class TestRealSpeechIsKept:
         # "Wheels on the Bus" style: repetitive but plenty of words.
         assert not main.speech_is_sparse(_t(*["the wheels on the bus go round and round"] * 30), 180)
 
+    def test_long_video_with_real_dialogue_is_not_sparse(self):
+        # A 40-minute vlog with dialogue bursts (e.g. 14 segments, 70 words):
+        # plenty of words to form shorts, must not be discarded for vision.
+        segments = ["bonjour je voudrais un morceau de fromage de chevre frais"] * 10
+        assert not main.speech_is_sparse(_t(*segments), 2500)
+
 
 class TestEdges:
     def test_empty_segments_is_sparse(self):

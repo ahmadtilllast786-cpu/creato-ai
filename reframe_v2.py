@@ -105,6 +105,38 @@ def scene_frame_ranges(scene_boundaries, strategies, total_frames):
     return ranges
 
 
+def coalesce_render_ranges(ranges, splits=None, screencasts=None):
+    """Merges consecutive compatible scene ranges (e.g. consecutive TRACK scenes)
+    into a single render range, drastically reducing the number of FFmpeg subprocesses
+    from dozens to 1-2 without changing the resulting video."""
+    if not ranges:
+        return []
+    splits = splits or {}
+    screencasts = screencasts or {}
+
+    coalesced = []
+    curr_start, curr_end, curr_strat = ranges[0]
+
+    for next_start, next_end, next_strat in ranges[1:]:
+        can_merge = (
+            curr_strat == next_strat
+            and curr_strat in ('TRACK', 'GENERAL', 'WIDE')
+            and curr_end == next_start
+            and next_start not in splits
+            and next_start not in screencasts
+            and curr_start not in splits
+            and curr_start not in screencasts
+        )
+        if can_merge:
+            curr_end = next_end
+        else:
+            coalesced.append((curr_start, curr_end, curr_strat))
+            curr_start, curr_end, curr_strat = next_start, next_end, next_strat
+
+    coalesced.append((curr_start, curr_end, curr_strat))
+    return coalesced
+
+
 def concat_list_content(segment_paths):
     # Single quotes per concat-demuxer spec; our paths are tempfile-generated
     # (no quotes in them).
@@ -521,10 +553,11 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
     ranges = scene_frame_ranges(scene_boundaries, strategies, len(xs))
     if not ranges:
         raise RuntimeError("no usable scene ranges")
+    render_ranges = coalesce_render_ranges(ranges, splits=splits, screencasts=screencasts)
     workdir = tempfile.mkdtemp(prefix="reframe_v2_")
     segments = []
     try:
-        for idx, (start_f, end_f, strategy) in enumerate(ranges):
+        for idx, (start_f, end_f, strategy) in enumerate(render_ranges):
             seg_path = os.path.join(workdir, f"seg_{idx:03d}.mp4")
             ss = start_f / fps
             dur = (end_f - start_f) / fps
@@ -582,24 +615,34 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
             ])
             segments.append(seg_path)
 
-        list_path = os.path.join(workdir, "concat.txt")
-        with open(list_path, "w") as f:
-            f.write(concat_list_content(segments))
+        if len(segments) == 1:
+            # Single continuous segment: mux directly with input audio without an intermediate concat list.
+            _run([
+                "ffmpeg", "-y", "-loglevel", "error",
+                "-i", segments[0],
+                "-i", input_video,
+                "-map", "0:v:0", "-map", "1:a:0?",
+                "-c:v", "copy", "-c:a", "copy", *METADATA_SCRUB,
+                "-movflags", "+faststart",
+                final_output_video,
+            ])
+        else:
+            list_path = os.path.join(workdir, "concat.txt")
+            with open(list_path, "w") as f:
+                f.write(concat_list_content(segments))
 
-        # Concat video segments (stream copy) + audio straight from the clip.
-        _run([
-            "ffmpeg", "-y", "-loglevel", "error",
-            "-f", "concat", "-safe", "0", "-i", list_path,
-            "-i", input_video,
-            "-map", "0:v:0", "-map", "1:a:0?",
-            "-c:v", "copy", "-c:a", "copy", *METADATA_SCRUB,
-            # +faststart moves the moov atom to the front so the browser <video>
-            # can start playing before the whole file downloads. Without it the
-            # in-app preview spins forever (download still works) — the moov
-            # lands at the end of a plain concat.
-            "-movflags", "+faststart",
-            final_output_video,
-        ])
+            # Concat video segments (stream copy) + audio straight from the clip.
+            _run([
+                "ffmpeg", "-y", "-loglevel", "error",
+                "-f", "concat", "-safe", "0", "-i", list_path,
+                "-i", input_video,
+                "-map", "0:v:0", "-map", "1:a:0?",
+                "-c:v", "copy", "-c:a", "copy", *METADATA_SCRUB,
+                # +faststart moves the moov atom to the front so the browser <video>
+                # can start playing before the whole file downloads.
+                "-movflags", "+faststart",
+                final_output_video,
+            ])
     finally:
         import shutil
         shutil.rmtree(workdir, ignore_errors=True)
