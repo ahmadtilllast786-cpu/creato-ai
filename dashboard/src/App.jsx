@@ -666,8 +666,12 @@ function App() {
             refreshMe();
           } else if (data.status === 'failed') {
             setStatus('error');
-            const errorMsg = data.error || (data.logs && data.logs.length > 0 ? data.logs[data.logs.length - 1] : "Process failed");
-            setLogs(prev => [...prev, "Error: " + errorMsg]);
+            let errorMsg = data.error;
+            if (!errorMsg && data.logs && data.logs.length > 0) {
+              const nonExit = [...data.logs].reverse().find(l => !l.includes("Process failed with exit code"));
+              errorMsg = nonExit || data.logs[data.logs.length - 1];
+            }
+            setLogs(prev => [...prev, "Error: " + (errorMsg || "Process failed")]);
             clearInterval(interval);
             refreshMe();
           } else {
@@ -713,7 +717,8 @@ function App() {
   // A self-hosted server running the moment picker on a local LLM
   // (LLM_BASE_URL) does not need a Gemini key for the core pipeline.
   const geminiOk = !!apiKey || !!localLlm;
-  const keysMissing = !billingEnabled && (!geminiOk || !uploadPostKey);
+  // Upload-Post key is only needed for social media publishing, not for core video clipping
+  const keysMissing = !billingEnabled && (!geminiOk && !localLlm);
   const needsPlan = billingEnabled && !isManaged;   // hosted, signed-out or no active plan/trial
 
   // Fresh sign-up: Clip Generator tutorial (AuthContext set os_show_clip_tutorial

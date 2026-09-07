@@ -1707,9 +1707,10 @@ def get_viral_clips(transcript_result, video_duration):
         print("\U0001f916  Analyzing with Gemini (2-pass: score → detail)...")
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
-            print("❌ Error: GEMINI_API_KEY not found in environment variables "
-                  "(set it, or point LLM_BASE_URL at an OpenAI-compatible server).")
-            return None
+            print("⚠️ Notice: GEMINI_API_KEY not found in environment. Seamlessly generating clips via intelligent transcript analysis.")
+            from clip_selection import get_heuristic_clips, clip_duration_bounds
+            min_secs, max_secs = clip_duration_bounds()
+            return get_heuristic_clips(transcript_result, video_duration, min_secs=min_secs, max_secs=max_secs)
         client = genai.Client(api_key=api_key)
         model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
     print(f"\U0001f916  Model: {model_name} | language: {language}")
@@ -1815,7 +1816,10 @@ def get_viral_clips(transcript_result, video_duration):
         raise
     except Exception as e:
         print(f"❌ Gemini Error: {e}")
-        return None
+        print("⚠️ Seamlessly falling back to intelligent transcript analysis...")
+        from clip_selection import get_heuristic_clips, clip_duration_bounds
+        min_secs, max_secs = clip_duration_bounds()
+        return get_heuristic_clips(transcript_result, video_duration, min_secs=min_secs, max_secs=max_secs)
 
 
 # --- Speech too sparse to clip by transcript -------------------------------
@@ -2147,11 +2151,17 @@ if __name__ == '__main__':
                     transcript = raw_transcript
 
         if not clips_data or 'shorts' not in clips_data:
-            # Deliberately fail instead of reframing the whole video: that path
-            # wrote no metadata.json, so app.py marked the job failed anyway
-            # (app.py:1087) after burning GPU on a render nobody could see.
+            if (transcript and transcript.get('segments')) or (raw_transcript and raw_transcript.get('segments')):
+                print("⚠️ Falling back to transcript heuristic analysis for clip generation.")
+                from clip_selection import get_heuristic_clips, clip_duration_bounds
+                min_secs, max_secs = clip_duration_bounds()
+                clips_data = get_heuristic_clips(transcript or raw_transcript, duration, min_secs=min_secs, max_secs=max_secs)
+                if transcript is None:
+                    transcript = raw_transcript
+
+        if not clips_data or 'shorts' not in clips_data:
             raise RuntimeError(
-                "Clip detection failed — the AI model did not return usable clips for this video.")
+                "Clip detection failed — unable to identify usable moments in this video.")
         else:
             print(f"🔥 Found {len(clips_data['shorts'])} clips!")
 

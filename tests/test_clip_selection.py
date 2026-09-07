@@ -265,3 +265,35 @@ class TestTrimToBest:
     def test_max_clips_is_never_below_one(self):
         shorts = [self._clip(0, 10), self._clip(50, 20)]
         assert len(trim_to_best(shorts, 0)) == 1
+
+
+class TestGetHeuristicClips:
+    def test_generates_clips_from_transcript(self):
+        from clip_selection import get_heuristic_clips
+        transcript = {
+            "segments": [
+                {"start": 0.0, "end": 10.0, "text": "Hello world and welcome.", "words": [
+                    {"word": "Hello", "start": 0.0, "end": 2.0},
+                    {"word": "world", "start": 2.1, "end": 5.0},
+                    {"word": "welcome", "start": 5.1, "end": 10.0},
+                ]},
+                {"start": 10.0, "end": 25.0, "text": "This is an important topic.", "words": [
+                    {"word": "This", "start": 10.0, "end": 15.0},
+                    {"word": "topic", "start": 15.1, "end": 25.0},
+                ]},
+                {"start": 25.0, "end": 45.0, "text": "Here is the key takeaway.", "words": [
+                    {"word": "Here", "start": 25.0, "end": 35.0},
+                    {"word": "takeaway", "start": 35.1, "end": 45.0},
+                ]},
+            ]
+        }
+        res = get_heuristic_clips(transcript, 60.0, min_secs=10.0, max_secs=40.0, target_clips=2)
+        assert res is not None
+        assert "shorts" in res
+        assert len(res["shorts"]) >= 1
+        for s in res["shorts"]:
+            assert s["end"] > s["start"]
+            assert s["end"] - s["start"] >= 10.0
+            assert s["video_title_for_youtube_short"]
+            assert s["predicted_score"] > 0
+

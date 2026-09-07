@@ -2032,18 +2032,23 @@ async def run_job(job_id, job_data):
                     jobs[job_id]['result'] = {'clips': valid_clips, 'cost_analysis': cost_analysis}
                 else:
                     jobs[job_id]['status'] = 'failed'
+                    err_text = _job_error_text(jobs[job_id]['logs'])
+                    jobs[job_id]['error'] = err_text or "No video clips were successfully rendered on disk."
                     jobs[job_id]['logs'].append("No video clips were successfully rendered on disk.")
             else:
                  jobs[job_id]['status'] = 'failed'
+                 err_text = _job_error_text(jobs[job_id]['logs'])
+                 jobs[job_id]['error'] = err_text or "No metadata file generated."
                  jobs[job_id]['logs'].append("No metadata file generated.")
         else:
             jobs[job_id]['status'] = 'failed'
+            err_text = _job_error_text(jobs[job_id]['logs'])
+            jobs[job_id]['error'] = err_text or f"Process failed with exit code {returncode}"
             jobs[job_id]['logs'].append(_scrub_secrets(f"Process failed with exit code {returncode}"))
             
     except Exception as e:
         jobs[job_id]['status'] = 'failed'
-        # Exception text can embed URLs with credentials (e.g. the proxy URL
-        # inside a yt-dlp/httpx error) — scrub before it reaches client logs.
+        jobs[job_id]['error'] = _scrub_secrets(f"Execution error: {str(e)}")
         jobs[job_id]['logs'].append(_scrub_secrets(f"Execution error: {str(e)}"))
 
 @app.get("/health")
