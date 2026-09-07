@@ -1,7 +1,8 @@
 @echo off
-title AI Short Video Generator
+title Creato - AI Short Video Studio
 echo ============================================================
-echo   Launching 100% Free AI Short Video Generator
+echo   Launching Creato - AI Short Video Studio
+echo   Theme: Cyber-Violet Obsidian Studio
 echo   Overlay: Black Card with White Writing
 echo ============================================================
 echo.

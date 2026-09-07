@@ -1652,7 +1652,7 @@ async def lifespan(app: FastAPI):
     yield
     # Cleanup (optional: cancel worker)
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(title="Creato - AI Short Video Studio", lifespan=lifespan)
 
 # Cloud mode: attach middleware + routers at import time (before the app serves).
 if BILLING_ENABLED:

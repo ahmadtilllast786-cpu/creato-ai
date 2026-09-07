@@ -1024,11 +1024,14 @@ function App() {
   // entirely — an unlabelled 80px rail ate a fifth of a phone screen.
   const Sidebar = () => (
     <div className="hidden md:flex w-20 lg:w-64 bg-paper2 border-r border-rule flex-col h-full shrink-0 transition-all duration-300">
-      <a href="#landing" className="p-6 flex items-center gap-3" title="go to landing page">
-        <div className="w-8 h-8 bg-paper3 rounded-input flex items-center justify-center shrink-0 overflow-hidden border border-rule">
-          <img src="/logo-openshorts.png" alt="Logo" className="w-full h-full object-cover" />
+      <a href="#landing" className="p-6 flex items-center gap-3 group" title="go to landing page">
+        <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-violet-600 via-indigo-600 to-cyan-400 flex items-center justify-center shrink-0 shadow-lg shadow-violet-500/25 text-white group-hover:scale-105 transition-transform">
+          <Sparkles size={18} />
         </div>
-        <span className="font-display lowercase text-lg text-ink hidden lg:block">openshorts</span>
+        <div className="hidden lg:flex items-center gap-1.5">
+          <span className="font-bold text-xl tracking-tight text-white">Creato</span>
+          <span className="text-[10px] font-semibold tracking-wider uppercase px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/30">AI</span>
+        </div>
       </a>
 
       <nav className="flex-1 px-4 py-4 space-y-1">
@@ -1080,10 +1083,13 @@ function App() {
       <div className="relative w-[17rem] max-w-[82vw] h-full bg-paper2 border-r border-rule flex flex-col animate-slide-in-left">
         <div className="flex items-center justify-between px-5 h-14 border-b border-rule shrink-0">
           <a href="#landing" className="flex items-center gap-2.5" onClick={() => setNavOpen(false)}>
-            <div className="w-7 h-7 bg-paper3 rounded-input overflow-hidden border border-rule shrink-0">
-              <img src="/logo-openshorts.png" alt="" className="w-full h-full object-cover" />
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-violet-600 via-indigo-600 to-cyan-400 flex items-center justify-center shrink-0 text-white shadow-md shadow-violet-500/20">
+              <Sparkles size={16} />
             </div>
-            <span className="font-display lowercase text-lg text-ink">openshorts</span>
+            <div className="flex items-center gap-1.5">
+              <span className="font-bold text-lg tracking-tight text-white">Creato</span>
+              <span className="text-[9px] font-semibold tracking-wider uppercase px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/30">AI</span>
+            </div>
           </a>
           <button
             onClick={() => setNavOpen(false)}
@@ -1189,8 +1195,8 @@ function App() {
             >
               <Menu size={20} />
             </button>
-            <span data-tutorial="nav-clips" className="md:hidden font-display lowercase text-base text-ink truncate">
-              {activeNav?.label || 'openshorts'}
+            <span data-tutorial="nav-clips" className="md:hidden font-bold text-base text-ink truncate">
+              {activeNav?.label || 'creato'}
             </span>
             {status !== 'idle' && (
               <button
@@ -1268,10 +1274,10 @@ function App() {
                 <span className="font-medium text-ink">Required API keys missing.</span>{' '}
                 <span className="text-muted">
                   {!geminiOk && !uploadPostKey
-                    ? 'Set your Gemini and Upload-Post API keys to use OpenShorts.'
+                    ? 'Set your Gemini and Upload-Post API keys to use Creato.'
                     : !geminiOk
-                      ? 'Set your Gemini API key to use OpenShorts.'
-                      : 'Set your Upload-Post API key to use OpenShorts.'}
+                      ? 'Set your free Gemini API key to use Creato.'
+                      : 'Set your Upload-Post API key to use Creato.'}
                 </span>
               </div>
             </div>

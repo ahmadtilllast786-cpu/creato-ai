@@ -233,9 +233,14 @@ export default function Landing({ onLaunchApp }) {
       {/* Navigation — N9 edge-aligned minimal */}
       <nav className="fixed top-0 w-full z-50 bg-paper border-b border-rule">
         <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <img src="/logo-openshorts.png" alt="OpenShorts logo" className="w-7 h-7" />
-            <span className="font-display text-lg lowercase text-ink">OpenShorts</span>
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-violet-600 via-indigo-600 to-cyan-400 flex items-center justify-center text-white shadow-md shadow-violet-500/25">
+              <Sparkles size={16} />
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="font-bold text-xl tracking-tight text-white">Creato</span>
+              <span className="text-[10px] font-semibold tracking-wider uppercase px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/30">AI</span>
+            </div>
           </div>
           <div className="hidden md:flex items-center gap-7 text-sm lowercase text-muted">
             <a href="#features" className="hover:text-ink transition-colors">Features</a>
@@ -246,7 +251,7 @@ export default function Landing({ onLaunchApp }) {
           </div>
           <div className="flex items-center gap-3">
             <a
-              href="https://github.com/mutonby/openshorts"
+              href="https://github.com/ahmadtilllast786-cpu/openshorts-ai-free"
               target="_blank"
               rel="noopener noreferrer"
               className="hidden sm:flex items-center gap-2 text-sm lowercase text-muted hover:text-ink transition-colors"
@@ -786,12 +791,14 @@ export default function Landing({ onLaunchApp }) {
             <a href="/n8n-youtube-shorts-automation" className="hover:text-ink transition-colors">n8n workflow</a>
           </nav>
           <div className="border-t border-rule pt-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <img src="/logo-openshorts.png" alt="OpenShorts" className="w-6 h-6" />
-              <span className="text-sm text-muted">OpenShorts — Free Open Source Clip Generator & AI UGC Video Creator</span>
+            <div className="flex items-center gap-2.5">
+              <div className="w-6 h-6 rounded-lg bg-gradient-to-tr from-violet-600 to-cyan-400 flex items-center justify-center text-white">
+                <Sparkles size={12} />
+              </div>
+              <span className="text-sm text-muted">Creato — 100% Free Open Source AI Short Video Generator</span>
             </div>
             <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm lowercase text-muted">
-              <a href="https://github.com/mutonby/openshorts" target="_blank" rel="noopener noreferrer" className="hover:text-ink transition-colors">GitHub</a>
+              <a href="https://github.com/ahmadtilllast786-cpu/openshorts-ai-free" target="_blank" rel="noopener noreferrer" className="hover:text-ink transition-colors">GitHub</a>
               <a href="#features" className="hover:text-ink transition-colors">Features</a>
               <a href="#faq" className="hover:text-ink transition-colors">FAQ</a>
               <a href="/terms" className="hover:text-ink transition-colors whitespace-nowrap">Terms</a>
