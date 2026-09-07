@@ -21,5 +21,5 @@ for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":5173 "') do (
 
 echo.
 echo [DONE] Creato AI servers stopped successfully.
-timeout /t 3 >nul
+powershell -NoProfile -Command "Start-Sleep -Seconds 2"
 exit /b 0
