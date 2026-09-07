@@ -208,28 +208,9 @@ def escape_filter_value(value):
     Windows absolute paths are why this exists: ``:`` separates filter options,
     so an interpolated ``C:/x/y.txt`` makes the parser look for an option named
     ``/x/y.txt`` and the whole filtergraph fails to build.
-
-    NOTE: an apostrophe in the path cannot be made safe here. ffmpeg's
-    filtergraph parser is not a shell -- the shell idiom ``'\''`` was tried on
-    29-jul-2026 and is worse than doing nothing: it drops the apostrophe AND
-    swallows the following option, so ``ass='...Earth'\''s.ass':fontsdir='...'``
-    resolved to a filename of "...Earths.ass:fontsdir=..." and failed to open.
-
-    The only reliable answer is to keep apostrophes OUT of any path that is
-    interpolated into a filter. Callers generate their own filenames, so they
-    control this: use a neutral name, never one derived from a video title.
     """
     if not value:
         return ""
-    # Try using relative path if possible to avoid Windows drive letter ':'
-    try:
-        if os.path.exists(value):
-            rel = os.path.relpath(value)
-            if not rel.startswith(".." + os.sep + ".."):
-                return rel.replace('\\', '/').replace("'", "\\'")
-    except Exception:
-        pass
-
     import re
     val = str(value).replace('\\', '/')
     val = re.sub(r'(?<!\\):', r'\:', val)
@@ -278,6 +259,7 @@ def run_ffmpeg_command(cmd, timeout=None, **kwargs):
     """Executes FFmpeg synchronously, ensuring all pipes and process handles are closed."""
     kwargs.setdefault('stdout', subprocess.PIPE)
     kwargs.setdefault('stderr', subprocess.PIPE)
+    kwargs.setdefault('close_fds', True)
     with subprocess.Popen(cmd, **kwargs) as proc:
         try:
             stdout, stderr = proc.communicate(timeout=timeout)
@@ -300,7 +282,10 @@ def open_video_capture(path):
     and garbage collected, preventing Windows WinError 32 file-locking issues.
     """
     import cv2
-    cap = cv2.VideoCapture(path)
+    import gc
+    cap = cv2.VideoCapture(path, cv2.CAP_FFMPEG)
+    if not cap.isOpened():
+        cap = cv2.VideoCapture(path)
     try:
         if not cap.isOpened():
             raise IOError(f"Cannot open video: {path}")

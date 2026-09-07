@@ -1285,52 +1285,90 @@ def generate_zoom_boxes(
 def generate_sendcmd_lines(
     boxes: List[Tuple[int, int, int, int]],
     fps: float,
+    orig_w: Optional[int] = None,
+    orig_h: Optional[int] = None,
     target: str = "crop@c",
     deadband_px: int = 3,
 ) -> List[str]:
     """Generate deduplicated sendcmd lines for FFmpeg dynamic crop.
-    Applies deadband threshold (deadband_px) so micro-jitter (<3px) doesn't flood FFmpeg with commands.
+    Guarantees that at no intermediate step does crop (x+w > orig_w) or (y+h > orig_h),
+    preventing FFmpeg memory access violations (exit code 3221225477 / 0xC0000005).
     """
+    if not boxes:
+        return []
+
+    if orig_w is None:
+        orig_w = max((b[0] + b[2] for b in boxes), default=1080)
+    if orig_h is None:
+        orig_h = max((b[1] + b[3] for b in boxes), default=1920)
+
     lines = []
-    prev = None
+    first_w, first_h, first_x, first_y = boxes[0]
+    lines.append(f"0.0000 {target} w {first_w};")
+    lines.append(f"0.0000 {target} h {first_h};")
+    lines.append(f"0.0000 {target} x {first_x};")
+    lines.append(f"0.0000 {target} y {first_y};")
 
-    for i, box in enumerate(boxes):
-        if prev is None:
-            t = i / fps
-            w, h, x, y = box
-            lines.append(f"{t:.4f} {target} w {w};")
-            lines.append(f"{t:.4f} {target} h {h};")
-            lines.append(f"{t:.4f} {target} x {x};")
-            lines.append(f"{t:.4f} {target} y {y};")
-            prev = box
+    cw, ch, cx, cy = first_w, first_h, first_x, first_y
+    prev_emitted = (cw, ch, cx, cy)
+
+    for i, (tw, th, tx, ty) in enumerate(boxes):
+        if i == 0:
             continue
-        w, h, x, y = box
-        pw, ph, px, py = prev
-
-        dw = abs(w - pw)
-        dh = abs(h - ph)
-        dx = abs(x - px)
-        dy = abs(y - py)
+        pw, ph, px, py = prev_emitted
+        dw = abs(tw - pw)
+        dh = abs(th - ph)
+        dx = abs(tx - px)
+        dy = abs(ty - py)
 
         if dw < deadband_px and dh < deadband_px and dx < deadband_px and dy < deadband_px:
             continue
 
         t = i / fps
-        effective_w = w if dw >= deadband_px else pw
-        effective_h = h if dh >= deadband_px else ph
-        effective_x = x if dx >= deadband_px else px
-        effective_y = y if dy >= deadband_px else py
 
-        if effective_w != pw:
-            lines.append(f"{t:.4f} {target} w {effective_w};")
-        if effective_h != ph:
-            lines.append(f"{t:.4f} {target} h {effective_h};")
-        if effective_x != px:
-            lines.append(f"{t:.4f} {target} x {effective_x};")
-        if effective_y != py:
-            lines.append(f"{t:.4f} {target} y {effective_y};")
+        # Horizontal: order w vs x so cx + cw <= orig_w at EVERY command
+        if tw > cw:
+            safe_x = min(cx, orig_w - tw)
+            safe_x -= safe_x % 2
+            if safe_x != cx:
+                lines.append(f"{t:.4f} {target} x {safe_x};")
+                cx = safe_x
+            if tw != cw:
+                lines.append(f"{t:.4f} {target} w {tw};")
+                cw = tw
+            if tx != cx:
+                lines.append(f"{t:.4f} {target} x {tx};")
+                cx = tx
+        else:
+            if tw != cw:
+                lines.append(f"{t:.4f} {target} w {tw};")
+                cw = tw
+            if tx != cx:
+                lines.append(f"{t:.4f} {target} x {tx};")
+                cx = tx
 
-        prev = (effective_w, effective_h, effective_x, effective_y)
+        # Vertical: order h vs y so cy + ch <= orig_h at EVERY command
+        if th > ch:
+            safe_y = min(cy, orig_h - th)
+            safe_y -= safe_y % 2
+            if safe_y != cy:
+                lines.append(f"{t:.4f} {target} y {safe_y};")
+                cy = safe_y
+            if th != ch:
+                lines.append(f"{t:.4f} {target} h {th};")
+                ch = th
+            if ty != cy:
+                lines.append(f"{t:.4f} {target} y {ty};")
+                cy = ty
+        else:
+            if th != ch:
+                lines.append(f"{t:.4f} {target} h {th};")
+                ch = th
+            if ty != cy:
+                lines.append(f"{t:.4f} {target} y {ty};")
+                cy = ty
+
+        prev_emitted = (cw, ch, cx, cy)
 
     return lines
 
@@ -1395,7 +1433,9 @@ def auto_edit_clip(
     orig_w -= orig_w % 2
     orig_h -= orig_h % 2
 
-    workdir = tempfile.mkdtemp(prefix="auto_edit_")
+    out_dir = os.path.dirname(os.path.abspath(output_clip_path)) or os.getcwd()
+    os.makedirs(out_dir, exist_ok=True)
+    workdir = tempfile.mkdtemp(prefix=".tmp_auto_edit_", dir=out_dir)
     trimmed_clip_path = os.path.join(workdir, "trimmed_pacing.mp4")
     cmd_file_path = os.path.join(workdir, "sendcmd.txt")
     srt_sub_path = os.path.join(workdir, "temp_subs.srt")
@@ -1543,7 +1583,7 @@ def auto_edit_clip(
             headroom_ratio=cfg.tilt_headroom_ratio,
             x_offsets=x_offsets
         )
-        lines = generate_sendcmd_lines(boxes, fps, deadband_px=3)
+        lines = generate_sendcmd_lines(boxes, fps, orig_w=orig_w, orig_h=orig_h, deadband_px=3)
         zooms_applied_count = len([z for z in zooms if z > 1.01])
 
         with open(cmd_file_path, "w", encoding="utf-8") as f:
@@ -1745,7 +1785,7 @@ def auto_edit_clip(
             audio_args = []
 
         render_cmd = [
-            "ffmpeg", "-y", "-loglevel", "error",
+            "ffmpeg", "-y", "-stats",
             *input_args,
             "-filter_complex", filter_graph,
             *map_args,
@@ -1754,6 +1794,13 @@ def auto_edit_clip(
             *METADATA_SCRUB,
             output_clip_path
         ]
+
+        import gc
+        gc.collect()
+        ensure_file_unlocked(active_working_clip, timeout=5)
+        ensure_file_unlocked(cmd_file_path, timeout=5)
+        if has_subtitles and os.path.exists(ass_sub_path):
+            ensure_file_unlocked(ass_sub_path, timeout=5)
 
         print(f"   🎬 Rendering auto-edited clip: {output_clip_path} (audio={has_audio}, subtitles={has_subtitles})")
         try:
@@ -1768,7 +1815,7 @@ def auto_edit_clip(
                     filter_parts_fallback.append(filter_parts[1])
                 filter_graph_fallback = ";".join(filter_parts_fallback)
                 render_cmd_fallback = [
-                    "ffmpeg", "-y", "-loglevel", "error",
+                    "ffmpeg", "-y", "-stats",
                     *input_args,
                     "-filter_complex", filter_graph_fallback,
                     *map_args,

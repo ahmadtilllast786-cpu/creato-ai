@@ -17,23 +17,19 @@ for _stream in (sys.stdout, sys.stderr, sys.stdin):
             pass
 
 def setup_ffmpeg_path():
-    venv_dir = os.path.dirname(sys.executable)
     candidates = [
-        venv_dir,
         r"C:\ffmpeg\bin",
-        r"C:\Program Files\FuseClip\resources\ffmpeg",
         r"C:\Users\PC\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg.Essentials_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1.1-essentials_build\bin",
+        os.path.dirname(sys.executable),
     ]
     
     current_path = os.environ.get("PATH", "")
     paths = current_path.split(os.pathsep)
-    normalized = {os.path.normcase(os.path.normpath(p)) for p in paths if p}
+    # Filter out any old FuseClip ffmpeg paths that crash on filtergraphs
+    filtered_paths = [p for p in paths if "fuseclip" not in p.lower()]
     
-    for candidate in candidates:
-        if os.path.isdir(candidate):
-            norm_c = os.path.normcase(os.path.normpath(candidate))
-            if norm_c not in normalized:
-                os.environ["PATH"] = candidate + os.pathsep + os.environ.get("PATH", "")
-                normalized.add(norm_c)
+    valid_candidates = [c for c in candidates if os.path.isdir(c)]
+    all_paths = valid_candidates + [p for p in filtered_paths if p not in valid_candidates]
+    os.environ["PATH"] = os.pathsep.join(all_paths)
 
 setup_ffmpeg_path()
