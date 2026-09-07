@@ -640,6 +640,73 @@ def _recover_jobs_from_disk():
         print(f"♻️  Recovered {recovered} completed job(s) from disk.")
 
 
+def _recover_or_create_job_from_disk(job_id: str):
+    """Ensure a job in OUTPUT_DIR has an entry in jobs dict."""
+    if job_id in jobs and jobs[job_id].get('result', {}).get('clips'):
+        return jobs[job_id]
+
+    job_path = os.path.join(OUTPUT_DIR, job_id)
+    if not os.path.isdir(job_path):
+        return jobs.get(job_id)
+
+    json_files = glob.glob(os.path.join(job_path, "*_metadata.json"))
+    main_json_files = [f for f in json_files if not f.endswith("_real_metadata.json")]
+    if not main_json_files and json_files:
+        main_json_files = json_files
+
+    clips = []
+    cost_analysis = None
+    if main_json_files:
+        try:
+            with open(main_json_files[0], 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            base_name = os.path.basename(main_json_files[0]).replace('_metadata.json', '')
+            clips = data.get('shorts', [])
+            for i, clip in enumerate(clips):
+                if not clip.get('video_url'):
+                    clip['video_url'] = (
+                        f"/videos/{job_id}/"
+                        f"{_canonical_clip_file(job_path, base_name, i)}")
+            cost_analysis = data.get('cost_analysis')
+        except Exception as e:
+            print(f"⚠️ Could not read metadata for job {job_id}: {e}")
+
+    if not clips:
+        # Fallback: scan for .mp4 files directly in the job directory
+        mp4_files = sorted(glob.glob(os.path.join(job_path, "*.mp4")))
+        for i, mp4 in enumerate(mp4_files):
+            fname = os.path.basename(mp4)
+            clips.append({
+                'title': f"Clip {i+1}",
+                'video_url': f"/videos/{job_id}/{fname}",
+                'base_video_url': f"/videos/{job_id}/{fname}",
+            })
+
+    owner = None
+    owner_path = os.path.join(job_path, ".owner")
+    if os.path.exists(owner_path):
+        try:
+            with open(owner_path) as f:
+                raw = f.read().strip()
+            owner = int(raw) if raw.isdigit() else (raw or None)
+        except Exception:
+            pass
+
+    if clips:
+        job_record = jobs.get(job_id) or {}
+        job_record.update({
+            'status': 'completed',
+            'logs': job_record.get('logs', []) + ["♻️ Job state recovered from disk."],
+            'output_dir': job_path,
+            'user_id': owner,
+            'result': {'clips': clips, 'cost_analysis': cost_analysis},
+        })
+        jobs[job_id] = job_record
+        return job_record
+
+    return jobs.get(job_id)
+
+
 # --- Mid-flight job resume (survive a redeploy without losing work) ----------
 # A job lives only in memory, so killing the container mid-processing used to
 # lose it: the user's clip just stops. We persist a tiny manifest per job and,
@@ -2940,12 +3007,17 @@ async def _ensure_job_files(job_id: str, request: Request) -> bool:
     keep their own 404s for jobs that genuinely don't exist.
     """
     job_dir = os.path.join(OUTPUT_DIR, job_id)
+    if os.path.isdir(job_dir):
+        _recover_or_create_job_from_disk(job_id)
+        if job_id in jobs and (glob.glob(os.path.join(job_dir, "*_metadata.json")) or glob.glob(os.path.join(job_dir, "*.mp4"))):
+            return True
     if job_id in jobs and glob.glob(os.path.join(job_dir, "*_metadata.json")):
         return True
     if not BILLING_ENABLED:
         return False
     try:
         await restore_project(job_id, request)
+        _recover_or_create_job_from_disk(job_id)
         return True
     except HTTPException:
         return False
@@ -2973,6 +3045,13 @@ class RevertBaseRequest(BaseModel):
     clip_index: int
 
 
+class ClipMetadataRequest(BaseModel):
+    job_id: str
+    clip_index: int = 0
+    filename: Optional[str] = None
+    force_reextract: Optional[bool] = False
+
+
 class EditRequest(BaseModel):
     job_id: str
     clip_index: int
@@ -2988,6 +3067,7 @@ async def clip_auto_edit(
     request: Request,
 ):
     await _ensure_job_files(req.job_id, request)
+    _recover_or_create_job_from_disk(req.job_id)
     if req.job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -3004,13 +3084,22 @@ async def clip_auto_edit(
     if req.input_filename:
         filename = os.path.basename(req.input_filename)
     else:
-        filename = os.path.basename(clip['video_url'])
+        filename = os.path.basename(clip.get('video_url', ''))
 
     # 1. Non-destructive: Preserve Stage 1 base cut
     clean_base = get_base_cut_filename(job_dir, filename)
     base_path = os.path.join(job_dir, clean_base)
     if not os.path.exists(base_path):
         base_path = os.path.join(job_dir, filename)
+
+    if not os.path.exists(base_path):
+        # Fallback: find matching mp4 file
+        mp4s = sorted(glob.glob(os.path.join(job_dir, "*.mp4")))
+        if req.clip_index < len(mp4s):
+            base_path = mp4s[req.clip_index]
+            clean_base = os.path.basename(base_path)
+        else:
+            raise HTTPException(status_code=404, detail=f"Video file not found: {filename}")
 
     if not clip.get('base_video_url'):
         clip['base_video_url'] = f"/videos/{req.job_id}/{os.path.basename(base_path)}"
@@ -3022,26 +3111,70 @@ async def clip_auto_edit(
     edited_filename = f"auto_edited_{ts}_{clean_base}"
     output_path = os.path.join(job_dir, edited_filename)
 
-    transcript_words = None
-    try:
-        meta_files = glob.glob(os.path.join(job_dir, "*_metadata.json"))
-        if meta_files:
-            with open(meta_files[0], 'r', encoding='utf-8') as f:
-                meta = json.load(f)
-                transcript_words = (meta.get('transcript') or {}).get('words')
-    except Exception as e:
-        print(f"⚠️ Could not load transcript words for auto edit: {e}")
+    # 2. Real Metadata: load or automatically extract on the fly
+    import metadata_extractor
+    loop = asyncio.get_event_loop()
+
+    real_meta = metadata_extractor.load_clip_metadata(job_dir, clean_base)
+    if not real_meta:
+        existing_tx = None
+        try:
+            meta_files = glob.glob(os.path.join(job_dir, "*_metadata.json"))
+            main_meta = [f for f in meta_files if not f.endswith("_real_metadata.json")]
+            if main_meta:
+                with open(main_meta[0], 'r', encoding='utf-8') as f:
+                    meta_data = json.load(f)
+                    existing_tx = meta_data.get('transcript')
+        except Exception as e:
+            print(f"⚠️ Could not load transcript for real metadata extraction: {e}")
+
+        clip_start = float(clip.get('start', 0.0) or 0.0)
+        clip_end = float(clip.get('end', 0.0) or 0.0) or None
+
+        def _do_extract():
+            return metadata_extractor.extract_clip_metadata(
+                output_dir=job_dir,
+                video_path=base_path,
+                clip_index=req.clip_index,
+                existing_transcript=existing_tx,
+                clip_start=clip_start,
+                clip_end=clip_end
+            )
+
+        try:
+            print(f"🔍 On-the-fly real metadata extraction for {clean_base}...")
+            real_meta = await loop.run_in_executor(None, _do_extract)
+        except Exception as e:
+            print(f"⚠️ Real metadata extraction encountered error: {e}")
+            real_meta = None
+
+    transcript_words = real_meta.get("words") if real_meta else None
+    precomputed_silences = real_meta.get("silence_intervals") if real_meta else None
+    precomputed_centers = [tuple(c) for c in real_meta["speaker_centers"]] if real_meta and real_meta.get("speaker_centers") else None
+
+    # Fallback to global transcript if words are still None
+    if not transcript_words:
+        try:
+            meta_files = glob.glob(os.path.join(job_dir, "*_metadata.json"))
+            main_meta = [f for f in meta_files if not f.endswith("_real_metadata.json")]
+            if main_meta:
+                with open(main_meta[0], 'r', encoding='utf-8') as f:
+                    meta_data = json.load(f)
+                    transcript_words = (meta_data.get('transcript') or {}).get('words')
+        except Exception:
+            pass
 
     try:
         import auto_editor
-        loop = asyncio.get_event_loop()
 
         def _do_auto_edit():
             return auto_editor.auto_edit_clip(
                 input_clip_path=base_path,
                 output_clip_path=output_path,
                 transcript_words=transcript_words,
-                max_zoom=req.max_zoom or 1.20
+                max_zoom=req.max_zoom or 1.20,
+                precomputed_silences=precomputed_silences,
+                precomputed_centers=precomputed_centers
             )
 
         result = await loop.run_in_executor(None, _do_auto_edit)
@@ -3059,16 +3192,19 @@ async def clip_auto_edit(
         # Persist in metadata.json
         try:
             meta_files = glob.glob(os.path.join(job_dir, "*_metadata.json"))
-            if meta_files:
-                with open(meta_files[0], 'r', encoding='utf-8') as f:
+            main_meta = [f for f in meta_files if not f.endswith("_real_metadata.json")]
+            if main_meta:
+                with open(main_meta[0], 'r', encoding='utf-8') as f:
                     meta = json.load(f)
                 shorts = meta.get('shorts', [])
                 if req.clip_index < len(shorts):
                     shorts[req.clip_index]['video_url'] = new_video_url
                     shorts[req.clip_index]['base_video_url'] = clip['base_video_url']
                     shorts[req.clip_index]['is_auto_edited'] = True
+                    if real_meta:
+                        shorts[req.clip_index]['real_metadata'] = real_meta
                     meta['shorts'] = shorts
-                    with open(meta_files[0], 'w', encoding='utf-8') as f:
+                    with open(main_meta[0], 'w', encoding='utf-8') as f:
                         json.dump(meta, f, indent=4)
         except Exception as e:
             print(f"⚠️ Failed to update metadata.json: {e}")
@@ -3080,11 +3216,115 @@ async def clip_auto_edit(
             "new_video_url": new_video_url,
             "base_video_url": clip['base_video_url'],
             "is_auto_edited": True,
-            "details": result
+            "details": result,
+            "metadata": real_meta
         }
 
     except Exception as e:
         print(f"❌ Auto Edit Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/clip/metadata")
+async def get_clip_metadata(
+    job_id: str,
+    clip_index: int = 0,
+    filename: Optional[str] = None,
+    request: Request = None,
+):
+    await _ensure_job_files(job_id, request)
+    _recover_or_create_job_from_disk(job_id)
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = jobs[job_id]
+    if request:
+        await _assert_job_owner(request, job)
+
+    clips = (job.get('result') or {}).get('clips', [])
+    if clip_index >= len(clips):
+        raise HTTPException(status_code=400, detail="Invalid clip index")
+
+    clip = clips[clip_index]
+    job_dir = os.path.join(OUTPUT_DIR, job_id)
+    target_file = filename or os.path.basename(clip.get('video_url', ''))
+    clean_base = get_base_cut_filename(job_dir, target_file)
+
+    import metadata_extractor
+    meta = metadata_extractor.load_clip_metadata(job_dir, clean_base)
+    if not meta:
+        meta = metadata_extractor.load_clip_metadata(job_dir, target_file)
+
+    if not meta:
+        raise HTTPException(status_code=404, detail="Clip metadata not found")
+
+    return {"success": True, "metadata": meta}
+
+
+@app.post("/api/clip/extract-metadata")
+async def extract_metadata_endpoint(
+    req: ClipMetadataRequest,
+    request: Request,
+):
+    await _ensure_job_files(req.job_id, request)
+    _recover_or_create_job_from_disk(req.job_id)
+    if req.job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = jobs[req.job_id]
+    await _assert_job_owner(request, job)
+
+    clips = (job.get('result') or {}).get('clips', [])
+    if req.clip_index >= len(clips):
+        raise HTTPException(status_code=400, detail="Invalid clip index")
+
+    clip = clips[req.clip_index]
+    job_dir = os.path.join(OUTPUT_DIR, req.job_id)
+    target_file = req.filename or os.path.basename(clip.get('video_url', ''))
+    clean_base = get_base_cut_filename(job_dir, target_file)
+    base_path = os.path.join(job_dir, clean_base)
+    if not os.path.exists(base_path):
+        base_path = os.path.join(job_dir, target_file)
+
+    if not os.path.exists(base_path):
+        raise HTTPException(status_code=404, detail=f"Video file not found: {target_file}")
+
+    import metadata_extractor
+    if not req.force_reextract:
+        meta = metadata_extractor.load_clip_metadata(job_dir, clean_base)
+        if meta:
+            return {"success": True, "metadata": meta, "cached": True}
+
+    existing_tx = None
+    try:
+        meta_files = glob.glob(os.path.join(job_dir, "*_metadata.json"))
+        main_meta = [f for f in meta_files if not f.endswith("_real_metadata.json")]
+        if main_meta:
+            with open(main_meta[0], 'r', encoding='utf-8') as f:
+                meta_data = json.load(f)
+                existing_tx = meta_data.get('transcript')
+    except Exception:
+        pass
+
+    clip_start = float(clip.get('start', 0.0) or 0.0)
+    clip_end = float(clip.get('end', 0.0) or 0.0) or None
+
+    loop = asyncio.get_event_loop()
+    def _do_extract():
+        return metadata_extractor.extract_clip_metadata(
+            output_dir=job_dir,
+            video_path=base_path,
+            clip_index=req.clip_index,
+            existing_transcript=existing_tx,
+            clip_start=clip_start,
+            clip_end=clip_end
+        )
+
+    try:
+        extracted = await loop.run_in_executor(None, _do_extract)
+        return {"success": True, "metadata": extracted, "cached": False}
+    except Exception as e:
+        print(f"❌ Extraction error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -3094,6 +3334,7 @@ async def clip_revert_base(
     request: Request,
 ):
     await _ensure_job_files(req.job_id, request)
+    _recover_or_create_job_from_disk(req.job_id)
     if req.job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -3118,15 +3359,16 @@ async def clip_revert_base(
 
     try:
         meta_files = glob.glob(os.path.join(job_dir, "*_metadata.json"))
-        if meta_files:
-            with open(meta_files[0], 'r', encoding='utf-8') as f:
+        main_meta = [f for f in meta_files if not f.endswith("_real_metadata.json")]
+        if main_meta:
+            with open(main_meta[0], 'r', encoding='utf-8') as f:
                 meta = json.load(f)
             shorts = meta.get('shorts', [])
             if req.clip_index < len(shorts):
                 shorts[req.clip_index]['video_url'] = base_url
                 shorts[req.clip_index]['is_auto_edited'] = False
                 meta['shorts'] = shorts
-                with open(meta_files[0], 'w', encoding='utf-8') as f:
+                with open(main_meta[0], 'w', encoding='utf-8') as f:
                     json.dump(meta, f, indent=4)
     except Exception as e:
         print(f"⚠️ Failed to update metadata.json on revert: {e}")
@@ -3136,6 +3378,7 @@ async def clip_revert_base(
         "new_video_url": base_url,
         "is_auto_edited": False
     }
+
 
 @app.post("/api/edit")
 async def edit_clip(

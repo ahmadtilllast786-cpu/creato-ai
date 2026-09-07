@@ -200,6 +200,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     const [showHookModal, setShowHookModal] = useState(false);
     const [showTranslateModal, setShowTranslateModal] = useState(false);
     const [editError, setEditError] = useState(null);
+    const [editStatus, setEditStatus] = useState('');
     const [isAutoEdited, setIsAutoEdited] = useState(() => Boolean(clip.is_auto_edited || (clip.video_url || '').includes('auto_edited') || (clip.video_url || '').includes('edited_')));
 
     const [clipDuration, setClipDuration] = useState(() => {
@@ -280,11 +281,13 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
 
     const handleAutoEdit = async () => {
         setIsEditing(true);
+        setEditStatus('extracting real speech & speaker metadata…');
         setEditError(null);
         try {
             const apiKey = geminiApiKey || localStorage.getItem('gemini_key');
             const geminiHeaders = apiKey ? { 'X-Gemini-Key': apiKey } : {};
 
+            setEditStatus('speaker tracking · pacing cuts · dynamic zooms…');
             // Call Stage 2 on-demand Auto Edit endpoint (MediaPipe speaker tracking, dynamic zooms, silence trimming)
             const res = await apiFetch('/api/clip/auto-edit', {
                 method: 'POST',
@@ -301,12 +304,14 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
 
             if (!res.ok) {
                 const errText = await res.text();
+                let errMsg = errText;
                 try {
                     const jsonErr = JSON.parse(errText);
-                    throw new Error(jsonErr.detail || errText);
-                } catch (e) {
-                    throw new Error(errText);
+                    errMsg = jsonErr.detail || errText;
+                } catch {
+                    errMsg = errText;
                 }
+                throw new Error(errMsg);
             }
 
             const data = await res.json();
@@ -320,15 +325,17 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             }
 
         } catch (e) {
-            setEditError(e.message);
-            setTimeout(() => setEditError(null), 5000);
+            setEditError(e.message || 'Auto edit failed');
+            setTimeout(() => setEditError(null), 6000);
         } finally {
             setIsEditing(false);
+            setEditStatus('');
         }
     };
 
     const handleRevertBase = async () => {
         setIsEditing(true);
+        setEditStatus('reverting to base cut…');
         setEditError(null);
         try {
             const res = await apiFetch('/api/clip/revert-base', {
@@ -342,12 +349,14 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
 
             if (!res.ok) {
                 const errText = await res.text();
+                let errMsg = errText;
                 try {
                     const jsonErr = JSON.parse(errText);
-                    throw new Error(jsonErr.detail || errText);
-                } catch (e) {
-                    throw new Error(errText);
+                    errMsg = jsonErr.detail || errText;
+                } catch {
+                    errMsg = errText;
                 }
+                throw new Error(errMsg);
             }
 
             const data = await res.json();
@@ -359,11 +368,13 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     videoRef.current.load();
                 }
             }
+
         } catch (e) {
-            setEditError(e.message);
-            setTimeout(() => setEditError(null), 5000);
+            setEditError(e.message || 'Revert failed');
+            setTimeout(() => setEditError(null), 6000);
         } finally {
             setIsEditing(false);
+            setEditStatus('');
         }
     };
 
@@ -866,11 +877,17 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     </button>
                 </div>
 
-                {/* Error Message */}
+                {/* Status or Error Message */}
+                {isEditing && (
+                    <div className="mb-3 px-3 py-2 rounded-input text-xs text-brass bg-[color-mix(in_oklab,var(--color-brass)_10%,transparent)] flex items-center gap-2">
+                        <Loader2 size={14} className="animate-spin shrink-0" />
+                        <span>{editStatus || 'processing auto edit…'}</span>
+                    </div>
+                )}
                 {editError && (
                     <div className="mb-3 px-3 py-2 rounded-input text-xs text-danger bg-[color-mix(in_oklab,var(--color-danger)_10%,transparent)] flex items-center gap-2">
                         <AlertCircle size={14} className="shrink-0" />
-                        {editError}
+                        <span>{editError}</span>
                     </div>
                 )}
 

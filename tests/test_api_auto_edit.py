@@ -121,3 +121,85 @@ class TestAutoEditEndpoints:
         data = res.json()
         assert data["success"] is True
         assert "auto_edited_" in data["new_video_url"]
+
+    def test_auto_edit_extracts_and_persists_real_metadata(self, job, monkeypatch):
+        import metadata_extractor
+
+        extracted_mock_meta = {
+            "clip_index": 0,
+            "duration": 30.0,
+            "words": [{"w": "Welcome", "s": 10.0, "e": 10.4, "startMs": 0, "endMs": 400}],
+            "silence_intervals": [{"start": 1.2, "end": 1.8, "duration": 0.6}],
+            "speaker_keyframes": [{"t": 0.5, "box": [100, 100, 200, 200], "center": [200, 200]}],
+            "speaker_centers": [[200, 200], [202, 201]],
+            "is_extracted": True
+        }
+
+        monkeypatch.setattr(metadata_extractor, "extract_clip_metadata", lambda **kwargs: extracted_mock_meta)
+
+        passed_kwargs = {}
+        def mock_auto_edit_clip(input_clip_path, output_clip_path, **kwargs):
+            passed_kwargs.update(kwargs)
+            with open(output_clip_path, "wb") as f:
+                f.write(b"dummy auto edited content")
+            return {"success": True, "output_path": output_clip_path, "silence_cuts": 1, "zooms_applied": True}
+
+        monkeypatch.setattr(auto_editor, "auto_edit_clip", mock_auto_edit_clip)
+
+        res = _request("POST", "/api/clip/auto-edit", {
+            "job_id": JOB_ID,
+            "clip_index": 0
+        })
+        assert res.status_code == 200, res.text
+        data = res.json()
+        assert data["success"] is True
+        assert data["metadata"]["is_extracted"] is True
+        assert passed_kwargs.get("transcript_words") == extracted_mock_meta["words"]
+        assert passed_kwargs.get("precomputed_silences") == extracted_mock_meta["silence_intervals"]
+        assert passed_kwargs.get("precomputed_centers") == [(200, 200), (202, 201)]
+
+    def test_auto_edit_recovers_job_from_disk_if_memory_lost(self, job, monkeypatch):
+        # Wipe in-memory jobs to simulate server restart
+        app_module.jobs.clear()
+        assert JOB_ID not in app_module.jobs
+
+        def mock_auto_edit_clip(input_clip_path, output_clip_path, **kwargs):
+            with open(output_clip_path, "wb") as f:
+                f.write(b"dummy")
+            return {"success": True, "output_path": output_clip_path}
+
+        monkeypatch.setattr(auto_editor, "auto_edit_clip", mock_auto_edit_clip)
+
+        res = _request("POST", "/api/clip/auto-edit", {
+            "job_id": JOB_ID,
+            "clip_index": 0
+        })
+        assert res.status_code == 200, res.text
+        assert JOB_ID in app_module.jobs
+
+    def test_get_and_extract_metadata_endpoints(self, job, monkeypatch):
+        import metadata_extractor
+        extracted_mock_meta = {
+            "clip_index": 0,
+            "words": [{"w": "Hey"}],
+            "silence_intervals": [],
+            "speaker_centers": [[540, 960]],
+            "is_extracted": True
+        }
+        monkeypatch.setattr(metadata_extractor, "extract_clip_metadata", lambda **kwargs: extracted_mock_meta)
+
+        # Test extract-metadata endpoint
+        ext_res = _request("POST", "/api/clip/extract-metadata", {
+            "job_id": JOB_ID,
+            "clip_index": 0
+        })
+        assert ext_res.status_code == 200, ext_res.text
+        ext_data = ext_res.json()
+        assert ext_data["success"] is True
+        assert ext_data["metadata"]["is_extracted"] is True
+
+        # Mock load_clip_metadata to return this
+        monkeypatch.setattr(metadata_extractor, "load_clip_metadata", lambda *a, **k: extracted_mock_meta)
+        get_res = _request("GET", f"/api/clip/metadata?job_id={JOB_ID}&clip_index=0")
+        assert get_res.status_code == 200, get_res.text
+        assert get_res.json()["metadata"]["is_extracted"] is True

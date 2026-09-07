@@ -2223,9 +2223,20 @@ if __name__ == '__main__':
                         captioned = auto_caption_clip(
                             deliver_path, transcript, start, end,
                             split_ranges=_layouts.split_ranges(clip['layout_ranges']))
-                        if captioned:
-                            ensure_file_unlocked(captioned, timeout=15)
                         print(f"   ✅ Clip {i+1} ready: {clip_final_path}")
+
+                        # Real Audio, Speech, Silence, and Speaker Metadata Extraction pass
+                        try:
+                            import metadata_extractor
+                            clip_meta = metadata_extractor.extract_clip_metadata(
+                                output_dir, clip_final_path, clip_index=i,
+                                existing_transcript=transcript,
+                                clip_start=start, clip_end=end
+                            )
+                            clip['real_metadata'] = clip_meta
+                            clip['is_extracted'] = True
+                        except Exception as meta_err:
+                            print(f"   ⚠️ Metadata extraction warning for clip {i+1}: {meta_err}")
                         # Hand the API the file to actually serve for this clip.
                         # Without it the status poller guesses the clean reframe
                         # name, so a job in flight showed every clip stripped of

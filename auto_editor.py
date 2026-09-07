@@ -431,7 +431,9 @@ def auto_edit_clip(
     transcript_words: Optional[List[Dict[str, Any]]] = None,
     max_zoom: float = DEFAULT_MAX_ZOOM,
     min_silence_s: float = MIN_SILENCE_SECONDS,
-    breath_margin: float = BREATH_MARGIN_SECONDS
+    breath_margin: float = BREATH_MARGIN_SECONDS,
+    precomputed_silences: Optional[List[Any]] = None,
+    precomputed_centers: Optional[List[Tuple[int, int]]] = None
 ) -> Dict[str, Any]:
     """Execute the Stage 2 On-Demand Auto Edit pipeline:
     1. Silence & Pacing Cuts (>400ms dead air removed with smooth micro-transitions).
@@ -467,7 +469,14 @@ def auto_edit_clip(
 
     try:
         # Step 1: Detect and trim dead silence (>400ms) with anti-pop audio micro-fades
-        silences = detect_silence_intervals(input_clip_path, min_silence_s=min_silence_s)
+        if precomputed_silences is not None:
+            silences = [
+                (float(s["start"]), float(s["end"])) if isinstance(s, dict) else (float(s[0]), float(s[1]))
+                for s in precomputed_silences
+            ]
+        else:
+            silences = detect_silence_intervals(input_clip_path, min_silence_s=min_silence_s)
+
         has_silence_cuts = False
 
         if silences:
@@ -492,8 +501,12 @@ def auto_edit_clip(
                 orig_h -= orig_h % 2
 
         # Step 2: MediaPipe active speaker tracking
-        print(f"   👤 Tracking active speaker with MediaPipe across {total_frames} frames...")
-        centers = track_active_speaker(active_working_clip, orig_w, orig_h, total_frames, fps)
+        if not has_silence_cuts and precomputed_centers and len(precomputed_centers) == total_frames:
+            print(f"   👤 Using precomputed speaker tracking across {total_frames} frames...")
+            centers = precomputed_centers
+        else:
+            print(f"   👤 Tracking active speaker with MediaPipe across {total_frames} frames...")
+            centers = track_active_speaker(active_working_clip, orig_w, orig_h, total_frames, fps)
 
         # Step 3: Compute contextual dynamic zooms (1.15x to 1.25x)
         print(f"   🔍 Computing contextual dynamic zooms (1.15x–1.25x)...")
