@@ -25,7 +25,7 @@ import time
 import uuid
 
 from ffmpeg_utils import (METADATA_SCRUB, QUALITY_FAST, audio_encode_args,
-                          video_encode_args)
+                          video_encode_args, safe_remove)
 
 # EDL limits. Deliberately generous — the editor is for humans fixing cuts,
 # not for stitching feature films.
@@ -239,8 +239,7 @@ def run_cut_concat(input_path, segments, out_path, workdir, runner=None):
         run(concat_command(list_path, out_path))
     finally:
         for path in part_paths + [list_path]:
-            if os.path.exists(path):
-                os.remove(path)
+            safe_remove(path)
     return out_path
 
 
@@ -333,8 +332,7 @@ def perform_recut(*, input_path, segments, output_dir, clean_name,
                 served_name = os.path.basename(captioned)
         return served_name, out_name
     finally:
-        if os.path.exists(work_path):
-            os.remove(work_path)
+        safe_remove(work_path)
 
 
 def _main_attr(name):

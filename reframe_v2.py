@@ -372,8 +372,13 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
     if not scenes:
         import cv2
         cap = cv2.VideoCapture(input_video)
-        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        cap.release()
+        try:
+            total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        finally:
+            cap.release()
+            del cap
+            import gc
+            gc.collect()
         from scenedetect import FrameTimecode
         scenes = [(FrameTimecode(0, fps), FrameTimecode(total, fps))]
 

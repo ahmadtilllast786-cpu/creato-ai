@@ -8,6 +8,7 @@ import sys
 import threading
 import unicodedata
 import uuid
+import gc
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from scenedetect import open_video, SceneManager
 from scenedetect.detectors import ContentDetector
@@ -30,7 +31,7 @@ from clip_selection import (build_transcript_windows, clip_count_targets,
                             clip_duration_bounds, snap_clip_to_words,
                             trim_to_best)
 from ffmpeg_utils import (video_encode_args, audio_encode_args, QUALITY,
-                          QUALITY_FAST, METADATA_SCRUB)
+                          QUALITY_FAST, METADATA_SCRUB, safe_remove, safe_replace)
 from dotenv import load_dotenv
 import json
 
@@ -409,6 +410,9 @@ DETECT_MAX_WIDTH = 640
 # in parallel, so every inference goes through this lock. Contention is small
 # (a few ms per call) — the ffmpeg renders are where the parallel time goes.
 DETECT_LOCK = threading.Lock()
+# Synchronize initial FFmpeg video cut operations across threads to prevent
+# concurrent file-access sharing violations on Windows (exit status 3199971767 / WinError 32).
+CUT_LOCK = threading.Lock()
 # Detect every Nth frame; SmoothedCameraman interpolates between updates.
 DETECT_STRIDE = max(int(os.environ.get("DETECT_STRIDE", "4")), 1)
 # YOLO fallback (no face found) is far heavier than MediaPipe — extra throttle.
@@ -636,6 +640,8 @@ def get_video_resolution(video_path):
                 int(probe.get(cv2.CAP_PROP_FRAME_HEIGHT)))
     finally:
         probe.release()
+        del probe
+        gc.collect()
 
 
 # Byte budget for the sanitized video title used as the stem of every derived
@@ -970,8 +976,7 @@ def finalize_clip_passthrough(input_video, final_output_video):
     The input is the freshly encoded cut, so a stream-copy remux is enough to
     add +faststart — re-encoding here would only cost time and quality.
     """
-    if os.path.exists(final_output_video):
-        os.remove(final_output_video)
+    safe_remove(final_output_video)
     print(f"🎬 Passthrough (native framing): {input_video}")
     cmd = [
         'ffmpeg', '-y', '-i', input_video,
@@ -1008,6 +1013,7 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=
         return None
     if not transcript or not transcript.get('segments'):
         return None  # silent video: nothing to caption
+    ass_path = None
     try:
         import subtitles as _subs
         style = _subs.AUTO_CAPTION_STYLE
@@ -1066,6 +1072,9 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=
         print(f"   ⚠️ Auto-captions failed ({type(e).__name__}: {e}) — "
               f"delivering the clip without them.")
         return None
+    finally:
+        if ass_path:
+            safe_remove(ass_path)
 
 
 def auto_hook_clip(clip_path, clip):
@@ -1178,12 +1187,11 @@ def apply_watermark(video_path):
     result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                             timeout=1800)
     if result.returncode == 0 and os.path.exists(tmp_path):
-        os.replace(tmp_path, video_path)
-        return True
+        if safe_replace(tmp_path, video_path):
+            return True
     err = (result.stderr or b"").decode(errors="ignore")[-300:]
     print(f"   ⚠️ Watermark pass failed (clip kept unmarked): {err}")
-    if os.path.exists(tmp_path):
-        os.remove(tmp_path)
+    safe_remove(tmp_path)
     return False
 
 
@@ -1229,7 +1237,7 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
         # isfile, not exists: a caller that hands us a directory should not
         # take an EACCES here, and must never have it deleted either.
         if os.path.isfile(stale):
-            os.remove(stale)
+            safe_remove(stale)
 
     print(f"🎬 Processing clip: {input_video}")
     print("   Step 1: Detecting scenes...")
@@ -1397,8 +1405,7 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
         return False
 
     for leftover in (silent_video_path, audio_track_path):
-        if os.path.exists(leftover):
-            os.remove(leftover)
+        safe_remove(leftover)
 
     return True
 
@@ -1457,12 +1464,7 @@ def load_transcript_checkpoint(output_dir, input_video, duration):
 
 
 def clear_transcript_checkpoint(output_dir):
-    try:
-        os.remove(os.path.join(output_dir, TRANSCRIPT_CHECKPOINT))
-    except FileNotFoundError:
-        pass
-    except Exception as e:
-        print(f"⚠️ Could not remove transcript checkpoint: {e}")
+    safe_remove(os.path.join(output_dir, TRANSCRIPT_CHECKPOINT))
 
 
 def transcribe_video(video_path):
@@ -2012,7 +2014,9 @@ if __name__ == '__main__':
                 clip_final_path = os.path.join(output_dir, clip_filename)
 
                 try:
-                    # ffmpeg cut — re-encoding for precision on strict seconds
+                    # ffmpeg cut — re-encoding for precision on strict seconds.
+                    # Initial cut is serialized across workers to prevent concurrent
+                    # read conflicts on input_video on Windows.
                     cut_command = [
                         'ffmpeg', '-y',
                         '-ss', str(start),
@@ -2022,7 +2026,12 @@ if __name__ == '__main__':
                         *audio_encode_args(),
                         clip_temp_path
                     ]
-                    subprocess.run(cut_command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                    with CUT_LOCK:
+                        cut_proc = subprocess.run(cut_command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                        if cut_proc.returncode != 0 or not os.path.exists(clip_temp_path) or os.path.getsize(clip_temp_path) == 0:
+                            err_msg = cut_proc.stderr.decode('utf-8', errors='replace') if cut_proc.stderr else 'Unknown cut error'
+                            print(f"   ❌ Cut failed for clip {i+1} (exit code {cut_proc.returncode}): {err_msg[:200]}")
+                            return False
 
                     success = render_clip(clip_temp_path, clip_final_path, output_format)
                     # Layer order: watermark burns into the canonical (so any
@@ -2064,8 +2073,7 @@ if __name__ == '__main__':
                               f"{os.path.basename(captioned or deliver_path)}")
                     return success
                 finally:
-                    if os.path.exists(clip_temp_path):
-                        os.remove(clip_temp_path)
+                    safe_remove(clip_temp_path)
 
             clip_workers = max(int(os.environ.get("CLIP_WORKERS", "3")), 1)
             shorts = clips_data['shorts']
@@ -2093,9 +2101,9 @@ if __name__ == '__main__':
                     json.dump(clips_data, f, indent=2)
 
     # Clean up original if requested
-    if args.url and not args.keep_original and os.path.exists(input_video):
-        os.remove(input_video)
-        print(f"🗑️  Cleaned up downloaded video.")
+    if args.url and not args.keep_original:
+        if safe_remove(input_video):
+            print(f"🗑️  Cleaned up downloaded video.")
     # The job finished: a later run in this directory must transcribe afresh.
     if not args.skip_analysis:
         clear_transcript_checkpoint(output_dir)

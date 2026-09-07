@@ -118,6 +118,9 @@ def frames_at(video_path, times, width=None):
                 out.append(buf.tobytes())
     finally:
         cap.release()
+        del cap
+        import gc
+        gc.collect()
     return out
 
 

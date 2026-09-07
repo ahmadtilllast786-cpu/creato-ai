@@ -12,6 +12,8 @@ audio codecs, filters) stay at each call site.
 import os
 import subprocess
 import threading
+import gc
+import time
 
 # Quality tiers pinning the historical libx264 settings.
 QUALITY = "quality"            # was: -preset medium -crf 18
@@ -118,18 +120,12 @@ def mark_ai_generated(path, detail=""):
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if r.returncode != 0 or not os.path.exists(tmp) or os.path.getsize(tmp) == 0:
             print(f"[ai-tag] skipped for {os.path.basename(path)}: {r.stderr[-300:]}")
-            if os.path.exists(tmp):
-                os.remove(tmp)
+            safe_remove(tmp)
             return False
-        os.replace(tmp, path)
-        return True
+        return safe_replace(tmp, path)
     except Exception as e:
         print(f"[ai-tag] skipped for {os.path.basename(path)}: {e}")
-        if os.path.exists(tmp):
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
+        safe_remove(tmp)
         return False
 
 
@@ -223,3 +219,52 @@ def escape_filter_value(value):
     control this: use a neutral name, never one derived from a video title.
     """
     return value.replace('\\', '/').replace(':', '\\:').replace("'", "\\'")
+
+
+def safe_remove(file_path: str, retries: int = 5, delay: float = 0.5) -> bool:
+    """Safely remove a file, retrying on transient Windows file locks (WinError 32).
+    Runs garbage collection to release unreferenced file handles and logs a warning
+    instead of raising an exception if removal fails.
+    """
+    if not file_path or not os.path.exists(file_path):
+        return True
+
+    for attempt in range(retries):
+        try:
+            gc.collect()
+            os.remove(file_path)
+            return True
+        except PermissionError as e:
+            if attempt < retries - 1:
+                time.sleep(delay)
+            else:
+                print(f"⚠️ [SafeRemove] PermissionError deleting {file_path} after {retries} retries: {e}")
+        except FileNotFoundError:
+            return True
+        except Exception as e:
+            print(f"⚠️ [SafeRemove] Error deleting {file_path}: {e}")
+            return False
+    return False
+
+
+def safe_replace(src: str, dst: str, retries: int = 5, delay: float = 0.5) -> bool:
+    """Safely replace dst with src on Windows, handling locks and retries."""
+    if not os.path.exists(src):
+        return False
+    for attempt in range(retries):
+        try:
+            gc.collect()
+            if os.path.exists(dst):
+                safe_remove(dst, retries=2, delay=0.2)
+            os.replace(src, dst)
+            return True
+        except PermissionError as e:
+            if attempt < retries - 1:
+                time.sleep(delay)
+            else:
+                print(f"⚠️ [SafeReplace] PermissionError replacing {src} -> {dst} after {retries} retries: {e}")
+        except Exception as e:
+            print(f"⚠️ [SafeReplace] Error replacing {src} -> {dst}: {e}")
+            return False
+    return False
+

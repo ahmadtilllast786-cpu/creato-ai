@@ -62,10 +62,11 @@ class TestHookStyles:
     def test_expected_style_names(self):
         assert set(HOOK_STYLES) == {
             "classic", "dark", "yellow", "red", "outline", "outline_yellow",
+            "black_white", "white_card",
         }
 
     def test_boxed_styles_have_opaque_box_and_shadow(self):
-        for name in ("classic", "dark", "yellow", "red"):
+        for name in ("classic", "dark", "yellow", "red", "black_white", "white_card"):
             look = HOOK_STYLES[name]
             assert look["box"][3] > 0, name
             assert look["shadow"] is True, name

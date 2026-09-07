@@ -3681,8 +3681,8 @@ async def get_clip_scenes(job_id: str, clip_index: int, request: Request):
             except Exception as exc:
                 print(f"Scene preview failed: {exc}")
             finally:
-                if os.path.exists(work_path):
-                    os.remove(work_path)
+                from ffmpeg_utils import safe_remove
+                safe_remove(work_path)
 
     # Serialized per job: two overlapping opens would run two ffmpeg writers
     # on the same stable preview/thumbnail names and serve a torn file.

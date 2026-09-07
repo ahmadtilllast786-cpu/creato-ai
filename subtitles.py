@@ -138,10 +138,15 @@ def generate_srt_from_video(video_path, output_path, max_chars=20, max_duration=
     # Get video duration to use as clip_end
     import cv2
     cap = cv2.VideoCapture(video_path)
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    duration = frame_count / fps if fps else 0
-    cap.release()
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        duration = frame_count / fps if fps else 0
+    finally:
+        cap.release()
+        del cap
+        import gc
+        gc.collect()
 
     if style == "karaoke":
         return generate_ass(transcript, 0, duration, output_path, max_chars, max_duration, **style_opts)

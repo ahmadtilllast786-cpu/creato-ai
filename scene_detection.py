@@ -20,8 +20,17 @@ Environment variables:
 """
 
 import os
+import sys
+import gc
 import subprocess
 import threading
+
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 import cv2
 import numpy as np
@@ -54,13 +63,24 @@ def detect_scenes(video_path):
 # --- legacy engine ----------------------------------------------------------
 
 def _detect_pyscenedetect(video_path):
-    video = open_video(video_path)
-    scene_manager = SceneManager()
-    scene_manager.add_detector(ContentDetector())
-    scene_manager.detect_scenes(video=video)
-    scene_list = scene_manager.get_scene_list()
-    fps = video.frame_rate
-    return scene_list, fps
+    video = None
+    try:
+        video = open_video(video_path)
+        scene_manager = SceneManager()
+        scene_manager.add_detector(ContentDetector())
+        scene_manager.detect_scenes(video=video)
+        scene_list = scene_manager.get_scene_list()
+        fps = video.frame_rate
+        return scene_list, fps
+    finally:
+        if video is not None:
+            try:
+                if hasattr(video, "close"):
+                    video.close()
+            except Exception:
+                pass
+            del video
+            gc.collect()
 
 
 # --- TransNetV2 engine ------------------------------------------------------
@@ -97,27 +117,34 @@ def _detect_transnetv2(video_path):
     import torch
 
     cap = cv2.VideoCapture(video_path)
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    cap.release()
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    finally:
+        cap.release()
+        del cap
+        gc.collect()
 
     frames = _extract_frames_small(video_path)
     model = _get_tn2_model()
     threshold = float(os.environ.get("TRANSNETV2_THRESHOLD", "0.5"))
 
     with _TN2_LOCK, torch.no_grad():
-        tensor = torch.from_numpy(np.ascontiguousarray(frames)).to(model.device)
+        tensor = torch.from_numpy(np.ascontiguousarray(frames).copy()).to(model.device)
         single_frame_pred, _ = model.predict_frames(tensor, quiet=True)
 
     # predictions_to_scenes returns [[start, end], ...] with INCLUSIVE ends;
     # downstream expects PySceneDetect's exclusive ends.
-    raw = model.predictions_to_scenes(single_frame_pred.numpy(), threshold=threshold)
+    pred_numpy = single_frame_pred.cpu().numpy()
+    raw = model.predictions_to_scenes(pred_numpy, threshold=threshold)
     bounds = [(int(s), int(e) + 1) for s, e in raw]
 
     # cv2's frame count can differ by a few frames from what ffmpeg decodes;
     # downstream loops run to the decoder's count, so cover the gap.
-    if total_frames > bounds[-1][1]:
+    if bounds and total_frames > bounds[-1][1]:
         bounds[-1] = (bounds[-1][0], total_frames)
+    elif not bounds:
+        bounds = [(0, total_frames if total_frames > 0 else len(frames))]
 
     min_sec = float(os.environ.get("SCENE_MIN_SEC", "0.4"))
     bounds = _merge_short_scenes(bounds, fps, min_sec)

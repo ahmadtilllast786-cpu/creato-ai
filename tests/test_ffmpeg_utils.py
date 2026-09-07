@@ -12,6 +12,8 @@ from ffmpeg_utils import (
     mark_ai_generated,
     reset_encoder_cache,
     video_encode_args,
+    safe_remove,
+    safe_replace,
 )
 
 
@@ -143,3 +145,40 @@ def test_ai_disclosure_never_destroys_the_file_it_cannot_tag():
         assert mark_ai_generated(p) is False
         assert open(p, "rb").read() == b"not a video"
         assert not os.path.exists(p + ".aitag.mp4")
+
+
+def test_safe_remove_and_safe_replace():
+    import tempfile, os, time, threading
+    with tempfile.TemporaryDirectory() as d:
+        # 1. Normal remove
+        p = os.path.join(d, "file.txt")
+        with open(p, "w") as f:
+            f.write("content")
+        assert safe_remove(p) is True
+        assert not os.path.exists(p)
+
+        # 2. Non-existent file
+        assert safe_remove(os.path.join(d, "nonexistent.txt")) is True
+
+        # 3. Transiently locked file (retries succeed)
+        with open(p, "w") as f:
+            f.write("held")
+        held = open(p, "r")
+        def release():
+            time.sleep(0.2)
+            held.close()
+        threading.Thread(target=release).start()
+        assert safe_remove(p, retries=5, delay=0.1) is True
+        assert not os.path.exists(p)
+
+        # 4. Safe replace
+        src = os.path.join(d, "src.txt")
+        dst = os.path.join(d, "dst.txt")
+        with open(src, "w") as f:
+            f.write("new content")
+        with open(dst, "w") as f:
+            f.write("old content")
+        assert safe_replace(src, dst) is True
+        assert not os.path.exists(src)
+        assert open(dst, "r").read() == "new content"
+

@@ -6,7 +6,7 @@ import urllib.request
 import uuid
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-from ffmpeg_utils import video_encode_args, QUALITY, METADATA_SCRUB
+from ffmpeg_utils import video_encode_args, QUALITY, METADATA_SCRUB, safe_remove
 
 
 def _truncate_bytes(text, max_bytes):
@@ -455,6 +455,5 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
         print(f"❌ Hook Gen Error: {e}")
         raise e
     finally:
-        # Cleanup temp image
-        if os.path.exists(hook_filename):
-            os.remove(hook_filename)
+        # Cleanup temp image safely
+        safe_remove(hook_filename)
