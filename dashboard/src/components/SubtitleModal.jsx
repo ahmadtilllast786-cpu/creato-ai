@@ -1,9 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { Loader2 } from 'lucide-react';
+import { Loader2, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { apiFetch } from '../lib/api';
+import { detectBurnedInCaptions } from '../lib/captionDetector';
 import RemotionPreview from './RemotionPreview';
 import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
+
+const COLLISION_OPTIONS = [
+    { value: 'smart_reposition', label: 'smart safe' },
+    { value: 'occlusion_mask', label: 'mask old' },
+    { value: 'manual_offset', label: 'manual y' },
+];
 
 const FONT_OPTIONS = [
     { value: 'Verdana', label: 'Verdana' },
@@ -78,6 +85,13 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
     const [animation, setAnimation] = useState('pop');
     const [showTextEditor, setShowTextEditor] = useState(false);
 
+    // Collision avoidance and pre-existing subtitle detection
+    const [hasBurnedInCaptions, setHasBurnedInCaptions] = useState(false);
+    const [isScanning, setIsScanning] = useState(false);
+    const [detectionConfidence, setDetectionConfidence] = useState(0);
+    const [collisionMode, setCollisionMode] = useState('smart_reposition'); // smart_reposition | occlusion_mask | manual_offset
+    const [manualYOffset, setManualYOffset] = useState(48); // % from top
+
     // Karaoke (server-side ASS burn) state
     const [style, setStyle] = useState('classic'); // classic | karaoke
     const [effect, setEffect] = useState('none'); // none | glow | pop | box
@@ -130,6 +144,40 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
             .finally(() => setCaptionsLoading(false));
     }, [isOpen, jobId, clipIndex]);
 
+    // Canvas frame pre-scan to detect pre-existing burned-in video subtitles
+    useEffect(() => {
+        if (!isOpen || !videoUrl) return;
+
+        let active = true;
+        setIsScanning(true);
+
+        detectBurnedInCaptions(videoUrl)
+            .then((res) => {
+                if (!active) return;
+                if (res && res.hasBurnedInCaptions) {
+                    setHasBurnedInCaptions(true);
+                    setDetectionConfidence(res.confidence || 0.8);
+                    setCollisionMode('smart_reposition');
+                } else {
+                    setHasBurnedInCaptions(false);
+                    setDetectionConfidence(0);
+                }
+            })
+            .catch(() => {
+                if (active) {
+                    setHasBurnedInCaptions(false);
+                    setDetectionConfidence(0);
+                }
+            })
+            .finally(() => {
+                if (active) setIsScanning(false);
+            });
+
+        return () => {
+            active = false;
+        };
+    }, [isOpen, videoUrl]);
+
     // When user edits text, redistribute words across original timestamps
     const handleTextEdit = (newText) => {
         setEditableText(newText);
@@ -158,6 +206,9 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
     const subtitleConfig = {
         captions,
         position,
+        hasBurnedInCaptions,
+        collisionMode,
+        manualYOffset,
         style: {
             fontFamily: fontName,
             fontSize: fontSize * 2.2, // Scale up for 1080p (modal fontSize is for small preview)
@@ -184,24 +235,51 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
         `-${bw}px 0 0 ${bc}`, `${bw}px 0 0 ${bc}`,
     ].join(', ') : 'none';
 
+    const isMaskMode = hasBurnedInCaptions && collisionMode === 'occlusion_mask';
+
     const fallbackPreviewStyle = {
         fontFamily: fontName,
         color: fontColor,
         fontSize: '20px',
         fontWeight: 'bold',
         maxWidth: '85%',
-        padding: '6px 12px',
-        borderRadius: '4px',
+        padding: isMaskMode ? '12px 24px' : '6px 12px',
+        borderRadius: isMaskMode ? '12px' : '4px',
         textAlign: 'center',
         lineHeight: '1.3',
-        ...(bgOpacity > 0
+        ...(isMaskMode
             ? {
-                backgroundColor: `${bgColor}${Math.round(bgOpacity * 255).toString(16).padStart(2, '0')}`,
-                textShadow: 'none',
+                backgroundColor: 'rgba(10, 11, 16, 0.94)',
+                backdropFilter: 'blur(16px)',
+                WebkitBackdropFilter: 'blur(16px)',
+                boxShadow: '0 8px 32px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.1)',
+                textShadow: outlineShadow,
             }
-            : { textShadow: outlineShadow }
+            : bgOpacity > 0
+                ? {
+                    backgroundColor: `${bgColor}${Math.round(bgOpacity * 255).toString(16).padStart(2, '0')}`,
+                    textShadow: 'none',
+                }
+                : { textShadow: outlineShadow }
         ),
     };
+
+    let fallbackPositionClasses = '';
+    let fallbackPositionInline = {};
+
+    if (hasBurnedInCaptions) {
+        if (collisionMode === 'smart_reposition') {
+            fallbackPositionClasses = 'top-0 bottom-0';
+        } else if (collisionMode === 'occlusion_mask') {
+            fallbackPositionClasses = 'bottom-20';
+        } else if (collisionMode === 'manual_offset') {
+            fallbackPositionInline = { top: `${manualYOffset}%`, transform: 'translateY(-50%)' };
+        }
+    } else {
+        if (position === 'top') fallbackPositionClasses = 'top-20';
+        else if (position === 'middle') fallbackPositionClasses = 'top-0 bottom-0';
+        else fallbackPositionClasses = 'bottom-20';
+    }
 
     return (
         <Modal isOpen={isOpen} onClose={onClose} size="xl" eyebrow="EDITOR · SUBTITLES" title="subtitles">
@@ -223,11 +301,10 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                     ) : (
                         <>
                             <video src={videoUrl} className="w-full h-full object-contain opacity-50" muted playsInline />
-                            <div className={`absolute w-full px-8 text-center transition-all duration-300 pointer-events-none flex flex-col items-center justify-center
-                                ${position === 'top' ? 'top-20' : ''}
-                                ${position === 'middle' ? 'top-0 bottom-0' : ''}
-                                ${position === 'bottom' ? 'bottom-20' : ''}
-                            `}>
+                            <div
+                                style={fallbackPositionInline}
+                                className={`absolute w-full px-8 text-center transition-all duration-300 pointer-events-none flex flex-col items-center justify-center ${fallbackPositionClasses}`}
+                            >
                                 <span style={fallbackPreviewStyle}>
                                     This is how your subtitles<br/>will appear on the video
                                 </span>
@@ -294,6 +371,70 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                 onChange={setPosition}
                                 size="sm"
                             />
+                        </div>
+
+                        {/* Collision Avoidance & Pre-existing Text Guard */}
+                        <div className="p-3 rounded-input bg-paper2 border border-rule space-y-2.5">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                    <span className={`w-2 h-2 rounded-full shrink-0 ${isScanning ? 'bg-muted animate-pulse' : hasBurnedInCaptions ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+                                    <span className="text-xs font-medium text-ink truncate">
+                                        {isScanning ? 'scanning canvas…' : hasBurnedInCaptions ? 'hardcoded text detected' : 'no burned-in text'}
+                                    </span>
+                                </div>
+                                <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-2" title="Toggle collision avoidance">
+                                    <input
+                                        type="checkbox"
+                                        checked={hasBurnedInCaptions}
+                                        onChange={(e) => setHasBurnedInCaptions(e.target.checked)}
+                                        className="sr-only peer"
+                                    />
+                                    <div className="w-8 h-4 rounded-full bg-paper3 peer-checked:bg-brass transition-colors after:content-[''] after:absolute after:top-0 after:left-0 after:h-4 after:w-4 after:rounded-full after:bg-ink after:transition-all peer-checked:after:translate-x-full"></div>
+                                </label>
+                            </div>
+
+                            {hasBurnedInCaptions && (
+                                <div className="space-y-2 pt-1 border-t border-rule2 animate-fade">
+                                    <div className="flex justify-between items-center">
+                                        <span className="eyebrow">Collision Mode</span>
+                                        {detectionConfidence > 0 && (
+                                            <span className="readout text-muted">conf {Math.round(detectionConfidence * 100)}%</span>
+                                        )}
+                                    </div>
+                                    <SegmentedControl
+                                        options={COLLISION_OPTIONS}
+                                        value={collisionMode}
+                                        onChange={setCollisionMode}
+                                        size="sm"
+                                    />
+                                    {collisionMode === 'smart_reposition' && (
+                                        <p className="text-[11px] text-muted leading-tight">
+                                            Auto-elevates captions to center safe zone to prevent text overlapping.
+                                        </p>
+                                    )}
+                                    {collisionMode === 'occlusion_mask' && (
+                                        <p className="text-[11px] text-muted leading-tight">
+                                            Renders an opaque frosted backdrop behind captions to cleanly mask old subtitles.
+                                        </p>
+                                    )}
+                                    {collisionMode === 'manual_offset' && (
+                                        <div className="space-y-1 pt-1">
+                                            <div className="flex justify-between">
+                                                <span className="readout">Height Offset</span>
+                                                <span className="readout">{manualYOffset}%</span>
+                                            </div>
+                                            <input
+                                                type="range"
+                                                min="10"
+                                                max="90"
+                                                value={manualYOffset}
+                                                onChange={(e) => setManualYOffset(parseInt(e.target.value))}
+                                                className="w-full accent-[var(--color-accent)]"
+                                            />
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                         </div>
 
                         {/* Animation Style (new) */}
@@ -453,6 +594,10 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                 position, fontSize, fontName, fontColor, borderColor, borderWidth, bgColor, bgOpacity,
                                 // Karaoke burn (server-side ASS render)
                                 style, effect, baseOpacity, uppercase, highlightColor,
+                                // Collision avoidance & safe zones
+                                hasBurnedInCaptions,
+                                collisionMode,
+                                manualYOffset,
                                 // Remotion data
                                 remotion: useRemotionPreview ? subtitleConfig : null,
                                 captions: textEdited ? captions : null,

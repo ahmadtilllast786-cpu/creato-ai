@@ -305,7 +305,9 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
                  border_color="#000000", border_width=2,
                  highlight_color="#FFD700", bg_color="#000000", bg_opacity=0.0,
                  effect="none", base_opacity=1.0, uppercase=False,
-                 margin_v=SAFE_MARGIN_V, split_ranges=None):
+                 margin_v=SAFE_MARGIN_V, split_ranges=None,
+                 collision_mode='smart_reposition', manual_y_offset=None,
+                 has_burned_in_captions=False):
     """
     Generates a karaoke-style ASS file: each block is shown like the SRT path,
     but the currently spoken word is rendered in highlight_color (modern
@@ -320,6 +322,22 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     blocks = _collect_word_blocks(transcript, clip_start, clip_end, max_chars, max_duration)
     if not blocks:
         return False
+
+    # Dynamic Collision Avoidance & Safe Zones for burned ASS
+    if has_burned_in_captions:
+        if collision_mode == 'smart_reposition':
+            # Elevate captions above lower-third (Y: 65%-95%) into center safe zone
+            margin_v = 115  # ~40% of PlayResY=288, placing text cleanly above burned-in subtitles
+        elif collision_mode == 'occlusion_mask':
+            # Activate opaque bounding box in ASS to mask old text
+            bg_opacity = 1.0
+            bg_color = bg_color if (bg_color and bg_color != "#000000") else "#0A0B10"
+        elif collision_mode == 'manual_offset' and manual_y_offset is not None:
+            try:
+                offset_pct = float(manual_y_offset)
+                margin_v = int(round(max(5.0, min(95.0, (100.0 - offset_pct))) / 100.0 * 288))
+            except Exception:
+                pass
 
     # Match the SRT burn path: PlayResY 288 keeps font sizes consistent.
     final_fontsize = int(_clamp_number(fontsize, 10, 200, 16) * 0.85)
@@ -353,7 +371,7 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     if bg_opacity > 0:
         border_style = 3
         outline_colour = hex_to_ass_color(bg_color, bg_opacity, fallback="000000")
-        outline_width = 1
+        outline_width = max(4, int(border_width) + 2) if (has_burned_in_captions and collision_mode == 'occlusion_mask') else 1
     else:
         border_style = 1
         outline_colour = hex_to_ass_color(border_color, 1.0, fallback="000000")

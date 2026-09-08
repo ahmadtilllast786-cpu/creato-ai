@@ -26,10 +26,19 @@ export interface SubtitleStyle {
   uppercase?: boolean;
 }
 
+export type SubtitleCollisionMode = "smart_reposition" | "occlusion_mask" | "manual_offset";
+
 export interface SubtitleConfig {
   captions: CaptionWord[];
   position: SubtitlePosition;
   style: SubtitleStyle;
+  hasBurnedInCaptions?: boolean;
+  collisionMode?: SubtitleCollisionMode;
+  manualYOffset?: number;
+  detectedZone?: {
+    topPercent: number;
+    bottomPercent: number;
+  };
 }
 
 // --- Hook config ---
@@ -104,6 +113,15 @@ export const subtitleConfigSchema = z.object({
   captions: z.array(captionWordSchema),
   position: z.enum(["top", "middle", "bottom"]),
   style: subtitleStyleSchema,
+  hasBurnedInCaptions: z.boolean().optional(),
+  collisionMode: z.enum(["smart_reposition", "occlusion_mask", "manual_offset"]).optional(),
+  manualYOffset: z.number().min(0).max(100).optional(),
+  detectedZone: z
+    .object({
+      topPercent: z.number(),
+      bottomPercent: z.number(),
+    })
+    .optional(),
 });
 
 export const hookConfigSchema = z.object({

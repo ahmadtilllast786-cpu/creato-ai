@@ -15,19 +15,36 @@ export const ShortVideo: React.FC<Record<string, unknown>> = (rawProps) => {
     rawProps as unknown as ShortVideoProps;
   return (
     <AbsoluteFill style={{ backgroundColor: "#000" }}>
-      {/* Layer 1: Base video with optional zoom/color effects */}
-      <VideoEffects config={effects}>
-        <Video
-          src={videoUrl}
-          style={{ width: "100%", height: "100%", objectFit: "cover" }}
-        />
-      </VideoEffects>
+      {/* Layer 1: Base video container with motion/zoom effects isolated to footage */}
+      <AbsoluteFill
+        id="video-motion-viewport"
+        style={{
+          overflow: "hidden",
+          pointerEvents: "auto",
+        }}
+      >
+        <VideoEffects config={effects}>
+          <Video
+            src={videoUrl}
+            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+          />
+        </VideoEffects>
+      </AbsoluteFill>
 
-      {/* Layer 2: Animated subtitles */}
-      {subtitles && <Subtitles config={subtitles} />}
+      {/* Layer 2: Independent stationary overlay viewport (Decoupled from video motion) */}
+      <AbsoluteFill
+        id="captions-overlay-viewport"
+        style={{
+          pointerEvents: "none",
+          zIndex: 10,
+        }}
+      >
+        {/* Animated subtitles (Screen-fixed coordinates, no motion-container inheritance) */}
+        {subtitles && <Subtitles config={subtitles} />}
 
-      {/* Layer 3: Hook text overlay */}
-      {hook && <HookOverlay config={hook} />}
+        {/* Hook text overlay */}
+        {hook && <HookOverlay config={hook} />}
+      </AbsoluteFill>
     </AbsoluteFill>
   );
 };

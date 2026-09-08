@@ -3735,6 +3735,9 @@ class SubtitleRequest(BaseModel):
     # instead of regenerating from the stored transcript — without this, text
     # edits in the modal were silently discarded on the server render path.
     words: Optional[List[CaptionWordIn]] = None
+    collision_mode: Optional[str] = "smart_reposition"
+    manual_y_offset: Optional[float] = None
+    has_burned_in_captions: Optional[bool] = False
 
 
 @app.get("/api/clip/{job_id}/{clip_index}/transcript")
@@ -4724,6 +4727,9 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
         border_width=req.border_width, highlight_color=req.highlight_color,
         bg_color=req.bg_color, bg_opacity=req.bg_opacity,
         effect=req.effect, base_opacity=req.base_opacity, uppercase=req.uppercase,
+        collision_mode=req.collision_mode or "smart_reposition",
+        manual_y_offset=req.manual_y_offset,
+        has_burned_in_captions=bool(req.has_burned_in_captions),
     )
 
     # Output video

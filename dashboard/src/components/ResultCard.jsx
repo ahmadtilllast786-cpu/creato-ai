@@ -465,6 +465,9 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     effect: options.effect || 'none',
                     base_opacity: options.baseOpacity ?? 1.0,
                     uppercase: options.uppercase || false,
+                    collision_mode: options.collisionMode || 'smart_reposition',
+                    manual_y_offset: options.manualYOffset ?? null,
+                    has_burned_in_captions: options.hasBurnedInCaptions ?? false,
                     input_filename: serverVideoFile,
                     // Edited caption text (clip-relative ms); null = server
                     // regenerates from the transcript as before.
