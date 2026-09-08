@@ -22,24 +22,39 @@ class TestZoneGeometry:
 
     def test_zone_classification_1080p(self):
         w = 1920
-        # Left Zone: [0, 640)
+        # Widened Left Zone: [0, 0.20*w) -> [0, 384)
         assert get_zone_for_x(100, w) == Zone.LEFT
-        assert get_zone_for_x(600, w) == Zone.LEFT
+        assert get_zone_for_x(300, w) == Zone.LEFT
 
-        # Center Zone: [640, 1280]
-        assert get_zone_for_x(650, w) == Zone.CENTER
+        # Widened Center Zone: [0.20*w, 0.80*w] -> [384, 1536]
+        assert get_zone_for_x(400, w) == Zone.CENTER
+        assert get_zone_for_x(600, w) == Zone.CENTER
         assert get_zone_for_x(960, w) == Zone.CENTER
         assert get_zone_for_x(1200, w) == Zone.CENTER
+        assert get_zone_for_x(1500, w) == Zone.CENTER
 
-        # Right Zone: (1280, 1920]
-        assert get_zone_for_x(1300, w) == Zone.RIGHT
+        # Widened Right Zone: (0.80*w, w] -> (1536, 1920]
+        assert get_zone_for_x(1600, w) == Zone.RIGHT
         assert get_zone_for_x(1800, w) == Zone.RIGHT
+
+        # Legacy 1/3 (33.3% - 66.7%) boundaries when configured
+        legacy_cfg = ThreeZoneConfig(left_boundary=1/3, right_boundary=2/3)
+        assert get_zone_for_x(600, w, legacy_cfg) == Zone.LEFT
+        assert get_zone_for_x(650, w, legacy_cfg) == Zone.CENTER
+        assert get_zone_for_x(1300, w, legacy_cfg) == Zone.RIGHT
 
     def test_zone_nominal_centers(self):
         w = 1920
-        assert get_zone_nominal_center(Zone.LEFT, w) == 320.0
+        # Widened defaults: Left nominal is 0.10*w = 192.0, Center is 960.0, Right is 0.90*w = 1728.0
+        assert get_zone_nominal_center(Zone.LEFT, w) == 192.0
         assert get_zone_nominal_center(Zone.CENTER, w) == 960.0
-        assert get_zone_nominal_center(Zone.RIGHT, w) == 1600.0
+        assert get_zone_nominal_center(Zone.RIGHT, w) == 1728.0
+
+        # Legacy 1/3 nominal centers: 320.0, 960.0, 1600.0
+        legacy_cfg = ThreeZoneConfig(left_boundary=1/3, right_boundary=2/3)
+        assert get_zone_nominal_center(Zone.LEFT, w, legacy_cfg) == pytest.approx(320.0)
+        assert get_zone_nominal_center(Zone.CENTER, w, legacy_cfg) == pytest.approx(960.0)
+        assert get_zone_nominal_center(Zone.RIGHT, w, legacy_cfg) == pytest.approx(1600.0)
 
     def test_crop_dimensions_9_16(self):
         # 1920x1080 landscape input -> 9:16 vertical crop

@@ -133,9 +133,12 @@ class SmoothedCameraman:
              self.crop_width = video_width
              self.crop_height = int(self.crop_width / aspect_ratio)
              
-        # Safe Zone: 20% of the video width
+        # Safe Zone: Widened ±15% of video width
         # As long as the target is within this zone relative to current center, DO NOT MOVE.
-        self.safe_zone_radius = self.crop_width * 0.25
+        self.safe_zone_radius = max(self.crop_width * 0.25, self.video_width * 0.15)
+
+        self.current_center_y = video_height / 2.0
+        self.target_center_y = video_height / 2.0
 
         # A target that teleports further than the safe zone in one detection is
         # far more often a detector error — a second face, a false positive, a
@@ -188,12 +191,20 @@ class SmoothedCameraman:
         x, y, w, h = face_box
         new_center = x + w / 2
 
+        # Vertical Headroom Alignment: Maintain 20%-30% headroom from top of crop box
+        top_y = y
+        target_headroom = 0.25
+        ideal_center_y = top_y + self.crop_height * (0.5 - target_headroom)
+        half_h = self.crop_height / 2.0
+        self.target_center_y = max(half_h, min(self.video_height - half_h, ideal_center_y))
+
         if self._snap_pending:
             self._snap_pending = False
             self._pending_target = None
             self._pending_count = 0
             self.target_center_x = new_center
             self.current_center_x = new_center
+            self.current_center_y = self.target_center_y
             return
 
         if abs(new_center - self.target_center_x) > self.safe_zone_radius:
@@ -218,6 +229,7 @@ class SmoothedCameraman:
         """
         if force_snap:
             self.current_center_x = self.target_center_x
+            self.current_center_y = getattr(self, 'target_center_y', self.video_height / 2.0)
         else:
             diff = self.target_center_x - self.current_center_x
             
@@ -243,6 +255,12 @@ class SmoothedCameraman:
                     self.current_center_x = self.target_center_x
             
             # If inside safe zone, DO NOTHING (Stationary Camera)
+
+            # Smooth vertical adjustment for headroom if available
+            if hasattr(self, 'target_center_y'):
+                diff_y = self.target_center_y - self.current_center_y
+                if abs(diff_y) > 2.0:
+                    self.current_center_y += (1 if diff_y > 0 else -1) * 3.0
                 
         # Clamp center
         half_crop = self.crop_width / 2
@@ -258,8 +276,17 @@ class SmoothedCameraman:
         x1 = max(0, x1)
         x2 = min(self.video_width, x2)
         
-        y1 = 0
-        y2 = self.video_height
+        if self.crop_height < self.video_height:
+            cy = getattr(self, 'current_center_y', self.video_height / 2.0)
+            half_h = self.crop_height / 2.0
+            clamped_cy = max(half_h, min(self.video_height - half_h, cy))
+            y1 = int(round(clamped_cy - half_h))
+            y2 = int(round(clamped_cy + half_h))
+            y1 = max(0, min(self.video_height - self.crop_height, y1))
+            y2 = y1 + self.crop_height
+        else:
+            y1 = 0
+            y2 = self.video_height
         
         return x1, y1, x2, y2
 

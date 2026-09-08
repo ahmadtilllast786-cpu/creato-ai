@@ -1,21 +1,16 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { X, Loader2, Crosshair, RotateCcw, AlertCircle, Play, Pause, Columns2 } from 'lucide-react';
+import {
+    X, Loader2, Crosshair, RotateCcw, AlertCircle,
+    Play, Pause, Columns2, Eye, EyeOff, Users, Layers
+} from 'lucide-react';
 import { getApiUrl } from '../config';
 import { apiJson } from '../lib/api';
+import { ASPECT_RATIOS, FRAMING_MODES } from '../lib/subjectTracker';
+import TrackingOverlayCanvas from './TrackingOverlayCanvas';
 
-// Manual reframing: the automatic crop is right most of the time and grossly
-// wrong occasionally, and until now there was no way to say "frame it here".
-//
-// The unit is the scene, because a podcast cuts between a fixed close camera
-// and a fixed wide one and the right crop differs per camera. Scenes the user
-// does not touch stay automatic, so fixing one bad shot cannot spoil the good
-// ones — only adjusted scenes are sent.
-//
-// Two things a still frame cannot tell you, and both are handled here:
-//   - WHO is talking. Each scene plays its own range of an uncropped preview,
-//     with sound, and the rectangle stays overlaid while it plays.
-//   - Whether one window is even enough. A scene can be split into two stacked
-//     regions, positioned independently.
+// Manual reframing & Multi-Person Auto-Reframe Engine:
+// Controls 3-layer visual overlays, dynamic aspect ratio fitting (9:16, 1:1, 4:5, 16:9),
+// and flexible framing modes (Full-Screen Focus vs. Split/Half-Screen).
 
 const fmt = (s) => {
     const m = Math.floor(s / 60);
@@ -31,6 +26,11 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
     const [playing, setPlaying] = useState(null);     // scene index being played
     const [saving, setSaving] = useState(false);
 
+    // Multi-Person & Reframe Control State
+    const [aspectRatio, setAspectRatio] = useState('9:16');
+    const [framingMode, setFramingMode] = useState(FRAMING_MODES.FULL_SCREEN);
+    const [showTrackingOverlays, setShowTrackingOverlays] = useState(true);
+
     useEffect(() => {
         let alive = true;
         (async () => {
@@ -38,10 +38,9 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
                 const res = await apiJson(`/api/clip/${jobId}/${clipIndex}/scenes`);
                 if (!alive) return;
                 setData(res);
-                // Start from what is already applied. A re-render rebuilds
-                // from source with only what it receives, so opening blank
-                // would quietly discard every earlier adjustment on the next
-                // save.
+                if (res.output_format === 'square') {
+                    setAspectRatio('1:1');
+                }
                 const salvos = res.saved_overrides || {};
                 setOverrides(Object.fromEntries(
                     Object.entries(salvos).map(([k, v]) => [Number(k), v])
@@ -55,11 +54,15 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
         return () => { alive = false; };
     }, [jobId, clipIndex]);
 
-    const half = (data?.crop_width_fraction ?? 0.5) / 2;
+    const sourceW = data?.source_width || 1920;
+    const sourceH = data?.source_height || 1080;
+    const sourceAspect = sourceW / sourceH;
+    const targetAspectVal = ASPECT_RATIOS[aspectRatio] || (9 / 16);
+    const calculatedCropWidthFraction = Math.min(1.0, targetAspectVal / sourceAspect);
+    const activeWidthFraction = calculatedCropWidthFraction || (data?.crop_width_fraction ?? 0.3164);
+    const half = activeWidthFraction / 2;
     const clamp = useCallback((v) => Math.min(1 - half, Math.max(half, v)), [half]);
 
-    // What a scene shows right now: the user's value, else the backend's
-    // suggestion (the biggest face in the shot).
     const valueOf = useCallback((scene) => (
         overrides[scene.index] ?? clamp(scene.suggested_center)
     ), [overrides, clamp]);
@@ -86,12 +89,9 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
         setOverrides((o) => {
             const cur = o[idx];
             if (cur && typeof cur === 'object') {
-                // back to a single window, kept where the top half was
                 return { ...o, [idx]: cur.top?.x ?? 0.5 };
             }
             const centre = typeof cur === 'number' ? cur : clamp(scene.suggested_center);
-            // SPLIT halves crop vertically as well, so each carries the face
-            // height the backend measured for this scene.
             const y = scene.suggested_center_y ?? 0.5;
             return { ...o, [idx]: {
                 top: { x: clamp(centre - 0.2), y },
@@ -99,6 +99,62 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
             } };
         });
     }, [clamp]);
+
+    const autoSplitScene = useCallback((idx, scene) => {
+        const persons = scene.detected_persons || [];
+        if (persons.length >= 2) {
+            const sorted = [...persons].sort((a, b) => a.x - b.x);
+            const p1 = sorted[0];
+            const p2 = sorted[1];
+            setOverrides((o) => ({
+                ...o,
+                [idx]: {
+                    top: { x: clamp(p1.x + p1.width / 2), y: Math.min(1.0, Math.max(0.0, p1.y + p1.height / 2)) },
+                    bottom: { x: clamp(p2.x + p2.width / 2), y: Math.min(1.0, Math.max(0.0, p2.y + p2.height / 2)) },
+                },
+            }));
+        } else {
+            toggleSplit(idx, scene);
+        }
+    }, [clamp, toggleSplit]);
+
+    const applyFramingModeToAll = useCallback((mode) => {
+        setFramingMode(mode);
+        if (!data?.scenes) return;
+
+        setOverrides((prev) => {
+            const next = { ...prev };
+            data.scenes.forEach((scene) => {
+                const persons = scene.detected_persons || [];
+                if (mode === FRAMING_MODES.SPLIT_LEFT) {
+                    const targetX = persons.length > 0 ? persons[0].x + persons[0].width / 2 : 0.30;
+                    next[scene.index] = clamp(targetX);
+                } else if (mode === FRAMING_MODES.SPLIT_RIGHT) {
+                    const targetX = persons.length > 0
+                        ? persons[persons.length - 1].x + persons[persons.length - 1].width / 2
+                        : 0.70;
+                    next[scene.index] = clamp(targetX);
+                } else if (mode === FRAMING_MODES.AUTO_SPLIT) {
+                    if (persons.length >= 2) {
+                        const sorted = [...persons].sort((a, b) => a.x - b.x);
+                        next[scene.index] = {
+                            top: { x: clamp(sorted[0].x + sorted[0].width / 2), y: sorted[0].y + sorted[0].height / 2 },
+                            bottom: { x: clamp(sorted[1].x + sorted[1].width / 2), y: sorted[1].y + sorted[1].height / 2 },
+                        };
+                    } else {
+                        next[scene.index] = clamp(scene.suggested_center);
+                    }
+                } else {
+                    if (scene.group_hull) {
+                        next[scene.index] = clamp(scene.group_hull.centerX);
+                    } else {
+                        next[scene.index] = clamp(scene.suggested_center);
+                    }
+                }
+            });
+            return next;
+        });
+    }, [data, clamp]);
 
     const resetScene = useCallback((idx) => {
         setOverrides((o) => {
@@ -125,7 +181,12 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
             const res = await apiJson('/api/clip/reframe', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ job_id: jobId, clip_index: clipIndex, crop_overrides: payload }),
+                body: JSON.stringify({
+                    job_id: jobId,
+                    clip_index: clipIndex,
+                    crop_overrides: payload,
+                    aspect_ratio: aspectRatio,
+                }),
             });
             if (onReframed) onReframed(clipIndex, res);
             onClose();
@@ -137,15 +198,14 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
     };
 
     return (
-        /* Bottom sheet on a phone, centred dialog from sm — same shape as the
-           shared Modal so the app has one overlay idiom, not two. */
         <div className="fixed inset-0 z-50 bg-black/80 flex items-end sm:items-center justify-center p-0 sm:p-4">
             <div className="card w-full max-w-3xl max-h-[92vh] sm:max-h-[90vh] flex flex-col rounded-b-none sm:rounded-card animate-sheet-up sm:animate-none">
+                {/* Header */}
                 <div className="flex items-center justify-between p-4 border-b border-rule">
                     <div className="flex items-center gap-2.5 min-w-0">
                         <Crosshair size={18} className="text-brass shrink-0" />
                         <div className="min-w-0">
-                            <h2 className="text-base font-medium text-ink lowercase truncate">reframing</h2>
+                            <h2 className="text-base font-medium text-ink lowercase truncate">reframing & smart tracking</h2>
                             {clipTitle && <p className="text-xs text-muted truncate">{clipTitle}</p>}
                         </div>
                     </div>
@@ -154,17 +214,86 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
                     </button>
                 </div>
 
+                {/* Sub-header Toolbar: Diagnostic Layers, Aspect Ratio, Framing Modes */}
+                <div className="px-4 py-2.5 border-b border-rule bg-paper2/50 flex flex-wrap items-center justify-between gap-2.5 text-xs">
+                    {/* Tracking Overlays Toggle */}
+                    <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={() => setShowTrackingOverlays(!showTrackingOverlays)}
+                            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-input border transition-colors ${
+                                showTrackingOverlays
+                                    ? 'bg-brass/15 border-brass/40 text-brass font-medium'
+                                    : 'bg-paper3/60 border-rule text-muted hover:text-ink'
+                            }`}
+                            title="Toggle Visual Tracking Overlays (Scanning Zone 20%-80%, Subject Boxes, Viewport, Headroom Guide)"
+                        >
+                            {showTrackingOverlays ? <Eye size={13} /> : <EyeOff size={13} />}
+                            <span>tracking overlays</span>
+                        </button>
+                        <span className="text-[10px] px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 font-mono hidden md:inline-flex items-center gap-1">
+                            focus: 20%–80%
+                        </span>
+                        <span className="text-[10px] px-2 py-0.5 rounded bg-green-500/10 text-green-400 border border-green-500/20 font-mono hidden sm:inline-flex items-center gap-1">
+                            deadzone: ±15%
+                        </span>
+                    </div>
+
+                    {/* Target Aspect Ratio Selector */}
+                    <div className="flex items-center gap-1">
+                        <span className="text-muted text-[11px] mr-1">ratio:</span>
+                        {['9:16', '1:1', '4:5', '16:9'].map((ratio) => (
+                            <button
+                                key={ratio}
+                                type="button"
+                                onClick={() => setAspectRatio(ratio)}
+                                className={`px-2 py-0.5 rounded text-[11px] font-mono transition-colors ${
+                                    aspectRatio === ratio
+                                        ? 'bg-ink text-paper font-semibold'
+                                        : 'bg-paper3 text-muted hover:text-ink'
+                                }`}
+                            >
+                                {ratio}
+                            </button>
+                        ))}
+                    </div>
+
+                    {/* Framing Modes Selector */}
+                    <div className="flex items-center gap-1">
+                        <span className="text-muted text-[11px] mr-1">framing:</span>
+                        {[
+                            { id: FRAMING_MODES.FULL_SCREEN, label: 'full' },
+                            { id: FRAMING_MODES.SPLIT_LEFT, label: 'left' },
+                            { id: FRAMING_MODES.SPLIT_RIGHT, label: 'right' },
+                            { id: FRAMING_MODES.AUTO_SPLIT, label: 'auto-split' },
+                        ].map((mode) => (
+                            <button
+                                key={mode.id}
+                                type="button"
+                                onClick={() => applyFramingModeToAll(mode.id)}
+                                className={`px-2 py-0.5 rounded text-[11px] transition-colors ${
+                                    framingMode === mode.id
+                                        ? 'bg-brass/20 text-brass border border-brass/40 font-medium'
+                                        : 'bg-paper3 text-muted hover:text-ink'
+                                }`}
+                            >
+                                {mode.label}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
                 <div className="flex-1 overflow-y-auto overscroll-contain custom-scrollbar p-4 space-y-5">
                     <p className="text-xs text-muted leading-relaxed">
                         Play a scene to hear who is talking, then drag the rectangle over
-                        the person you want. Each scene is one camera. Scenes you leave
-                        alone keep the automatic camera.
+                        the person you want. Multi-subject bounding boxes and group hulls are
+                        tracked in real-time. Scenes you leave alone keep the automatic camera.
                     </p>
 
                     {loading && (
                         <div className="flex items-center gap-2 text-sm text-muted py-8 justify-center">
                             <Loader2 size={18} className="animate-spin text-brass" />
-                            reading the scenes…
+                            reading the scenes & detecting subjects…
                         </div>
                     )}
 
@@ -180,7 +309,9 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
                             key={scene.index}
                             scene={scene}
                             value={valueOf(scene)}
-                            widthFraction={data.crop_width_fraction}
+                            widthFraction={activeWidthFraction}
+                            aspectRatio={aspectRatio}
+                            showOverlays={showTrackingOverlays}
                             previewUrl={data.preview_url}
                             touched={scene.index in overrides}
                             playing={playing === scene.index}
@@ -188,6 +319,7 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
                             onMoveSingle={(f) => setSingle(scene.index, f)}
                             onMoveHalf={(which, f) => setSplitHalf(scene.index, which, f)}
                             onToggleSplit={() => toggleSplit(scene.index, scene)}
+                            onAutoSplit={() => autoSplitScene(scene.index, scene)}
                             onReset={() => resetScene(scene.index)}
                         />
                     ))}
@@ -217,17 +349,14 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
     );
 }
 
-
-// One scene. While it plays, the frame is replaced by the uncropped preview
-// seeked to this scene, so the rectangle can be judged against moving pictures
-// and sound rather than a single still.
-function SceneRow({ scene, value, widthFraction, previewUrl, touched, playing,
-                    onPlayToggle, onMoveSingle, onMoveHalf, onToggleSplit, onReset }) {
+function SceneRow({ scene, value, widthFraction, aspectRatio, showOverlays, previewUrl, touched, playing,
+                    onPlayToggle, onMoveSingle, onMoveHalf, onToggleSplit, onAutoSplit, onReset }) {
     const boxRef = useRef(null);
     const videoRef = useRef(null);
     const [dragging, setDragging] = useState(null);   // null | 'single' | 'top' | 'bottom'
 
     const isSplit = value && typeof value === 'object';
+    const numPersons = scene.detected_persons ? scene.detected_persons.length : 0;
 
     // Play only this scene's slice of the shared preview.
     useEffect(() => {
@@ -284,11 +413,11 @@ function SceneRow({ scene, value, widthFraction, previewUrl, touched, playing,
                 key={which}
                 onMouseDown={startDrag(which)}
                 onTouchStart={startDrag(which)}
-                className="absolute inset-y-0 border-2 border-brass cursor-ew-resize"
+                className="absolute inset-y-0 border-2 border-brass cursor-ew-resize z-20"
                 style={{ left: `${leftPct}%`, width: `${widthFraction * 100}%` }}
             >
                 {label && (
-                    <span className="absolute top-1 left-1 text-[10px] px-1 rounded bg-brass text-paper lowercase">
+                    <span className="absolute top-1 left-1 text-[10px] px-1 rounded bg-brass text-paper lowercase font-mono">
                         {label}
                     </span>
                 )}
@@ -310,15 +439,30 @@ function SceneRow({ scene, value, widthFraction, previewUrl, touched, playing,
                     <span className="readout text-muted truncate">
                         scene {scene.index + 1} · {fmt(scene.start)}–{fmt(scene.end)}
                     </span>
+                    {numPersons > 0 && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-paper3 border border-rule text-muted flex items-center gap-1 font-mono">
+                            <Users size={10} className="text-brass" />
+                            {numPersons} {numPersons === 1 ? 'subject' : 'subjects'}
+                        </span>
+                    )}
                 </div>
-                <div className="flex items-center gap-3 shrink-0">
+                <div className="flex items-center gap-2.5 shrink-0">
+                    {numPersons >= 2 && !isSplit && (
+                        <button
+                            onClick={onAutoSplit}
+                            className="flex items-center gap-1 text-[11px] text-brass hover:underline bg-brass/10 px-1.5 py-0.5 rounded border border-brass/20"
+                            title="Auto-split dual cameras across detected subjects"
+                        >
+                            <Columns2 size={11} /> auto-split
+                        </button>
+                    )}
                     <button
                         onClick={onToggleSplit}
                         className={`flex items-center gap-1 transition-colors ${
                             isSplit ? 'text-brass' : 'text-muted hover:text-ink2'}`}
                         title="stack two regions instead of one window"
                     >
-                        <Columns2 size={12} /> split
+                        <Columns2 size={12} /> {isSplit ? 'single' : 'split'}
                     </button>
                     {touched ? (
                         <button onClick={onReset} className="flex items-center gap-1 text-brass hover:underline">
@@ -335,6 +479,36 @@ function SceneRow({ scene, value, widthFraction, previewUrl, touched, playing,
                 className={`relative overflow-hidden rounded-input select-none border ${
                     touched ? 'border-brass' : 'border-rule'}`}
             >
+                {/* 3 Visual UI Diagnostic / Editing Layers (HTML5 Canvas) */}
+                <TrackingOverlayCanvas
+                    persons={scene.detected_persons || []}
+                    groupHull={scene.group_hull || null}
+                    cameraViewport={
+                        isSplit
+                            ? {
+                                  x: Math.max(0, value.top.x - widthFraction / 2),
+                                  y: 0,
+                                  width: widthFraction,
+                                  height: 1.0,
+                                  centerX: value.top.x,
+                                  centerY: 0.5,
+                              }
+                            : {
+                                  x: Math.max(0, value - widthFraction / 2),
+                                  y: 0,
+                                  width: widthFraction,
+                                  height: 1.0,
+                                  centerX: value,
+                                  centerY: 0.5,
+                              }
+                    }
+                    aspectRatio={aspectRatio}
+                    showOverlays={showOverlays}
+                    showScanningZone={true}
+                    showHeadroom={true}
+                    deadzoneRadius={0.15}
+                />
+
                 {playing && previewUrl ? (
                     <video
                         ref={videoRef}
@@ -357,9 +531,9 @@ function SceneRow({ scene, value, widthFraction, previewUrl, touched, playing,
                     the crop is what stays bright. */}
                 {!isSplit && (
                     <>
-                        <div className="absolute inset-y-0 left-0 bg-black/65 pointer-events-none"
+                        <div className="absolute inset-y-0 left-0 bg-black/65 pointer-events-none z-15"
                              style={{ width: `${Math.max(0, (value - widthFraction / 2) * 100)}%` }} />
-                        <div className="absolute inset-y-0 right-0 bg-black/65 pointer-events-none"
+                        <div className="absolute inset-y-0 right-0 bg-black/65 pointer-events-none z-15"
                              style={{ width: `${Math.max(0, 100 - (value + widthFraction / 2) * 100)}%` }} />
                     </>
                 )}

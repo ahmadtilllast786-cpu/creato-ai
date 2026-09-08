@@ -35,16 +35,16 @@ class Zone(IntEnum):
 @dataclass
 class ThreeZoneConfig:
     """Hyperparameters for 3-Zone Dynamic Framing."""
-    # Zone division as fractions of source width
-    left_boundary: float = 1.0 / 3.0
-    right_boundary: float = 2.0 / 3.0
+    # Zone division as fractions of source width: widened central focus band (20% to 80%)
+    left_boundary: float = 0.20
+    right_boundary: float = 0.80
 
     # Minimum time to hold any zone before allowing an intra-scene camera move
     min_hold_seconds: float = 2.0
 
-    # Deadzone ratio for studio tripod lock (fraction of crop_w)
+    # Deadzone ratio for studio tripod lock (fraction of orig_w): ±15% screen width
     # When subject is within deadzone, camera is 100% frozen stationary (zero shaking)
-    deadzone_ratio: float = 0.20  # ~120px on 608px crop width
+    deadzone_ratio: float = 0.15  # ±15% of screen width (~288px on 1920w)
 
     # Sticky speaker bonus to prevent jitter / jumping between people in a group
     sticky_speaker_bonus: float = 2.5
@@ -78,14 +78,17 @@ class DirectorConfig(ThreeZoneConfig):
     """Hyperparameters tailored for the Director Multi-Camera Engine.
 
     Operates like a professional TV studio director:
+      - Widened Center Scanning Zone (20% to 80%, ±30% from center).
       - Mandatory 2.5 to 3.5s dwell time.
-      - 20% center deadzone with strict anchor lock (Zero pan).
+      - ±15% horizontal deadzone with strict anchor lock (Zero pan).
       - Discrete 3-camera shot switching via hard jump cuts (Camera A: Center, B: Left, C: Right).
       - Voice-corroborated side participant tracking (>1.2s speech energy).
       - Action override for sustained motion (>1.5s).
     """
+    left_boundary: float = 0.20    # 20% left boundary
+    right_boundary: float = 0.80   # 80% right boundary
     min_hold_seconds: float = 3.0  # Enforce 3.0s minimum dwell time (2.5 to 3.5s)
-    deadzone_ratio: float = 0.20   # 20% center deadzone
+    deadzone_ratio: float = 0.15   # ±15% center deadzone
     switch_mode: str = "cut"       # Discrete hard jump cuts
     pan_frames: int = 15
     speech_energy_min_duration: float = 1.2  # Floor taken >1.2s
@@ -107,12 +110,13 @@ def get_zone_for_x(x: float, width: float, config: Optional[ThreeZoneConfig] = N
     return Zone.CENTER
 
 
-def get_zone_nominal_center(zone: Zone, width: float) -> float:
+def get_zone_nominal_center(zone: Zone, width: float, config: Optional[ThreeZoneConfig] = None) -> float:
     """Nominal horizontal center for each zone."""
+    cfg = config or ThreeZoneConfig()
     if zone == Zone.LEFT:
-        return width / 6.0
+        return (cfg.left_boundary / 2.0) * width
     elif zone == Zone.RIGHT:
-        return 5.0 * width / 6.0
+        return (cfg.right_boundary + (1.0 - cfg.right_boundary) / 2.0) * width
     return width / 2.0
 
 
@@ -314,6 +318,9 @@ class ThreeZoneFramingEngine:
         self.current_center_x: float = orig_w / 2.0
         self.target_center_x: float = orig_w / 2.0
         self.anchor_center_x: float = orig_w / 2.0
+        self.current_center_y: float = orig_h / 2.0
+        self.target_center_y: float = orig_h / 2.0
+        self.anchor_center_y: float = orig_h / 2.0
         self.committed_zone: Zone = Zone.CENTER
         self.last_zone_switch_frame: int = -10000
 
@@ -337,12 +344,16 @@ class ThreeZoneFramingEngine:
         # Rapid dialogue flag for current scene
         self.rapid_dialogue_active: bool = False
 
-    def reset(self, new_center: Optional[float] = None):
+    def reset(self, new_center: Optional[float] = None, new_center_y: Optional[float] = None):
         """Reset camera state for a new scene cut."""
         center = self.orig_w / 2.0 if new_center is None else new_center
+        center_y = self.orig_h / 2.0 if new_center_y is None else new_center_y
         self.current_center_x = center
         self.target_center_x = center
         self.anchor_center_x = center
+        self.current_center_y = center_y
+        self.target_center_y = center_y
+        self.anchor_center_y = center_y
         self.committed_zone = get_zone_for_x(center, self.orig_w, self.config)
         self.last_zone_switch_frame = -10000
         self.pan_start_frame = -10000
@@ -354,12 +365,17 @@ class ThreeZoneFramingEngine:
         self.turn_monitor.reset()
         self.rapid_dialogue_active = False
 
-    def snap_to(self, center_x: float):
+    def snap_to(self, center_x: float, center_y: Optional[float] = None):
         """Instant cut/snap to target center without panning."""
         clamped = self._clamp_center(center_x)
         self.current_center_x = clamped
         self.target_center_x = clamped
         self.anchor_center_x = clamped
+        if center_y is not None:
+            clamped_y = self._clamp_center_y(center_y)
+            self.current_center_y = clamped_y
+            self.target_center_y = clamped_y
+            self.anchor_center_y = clamped_y
         self.committed_zone = get_zone_for_x(clamped, self.orig_w, self.config)
         self.is_panning = False
 
@@ -367,6 +383,11 @@ class ThreeZoneFramingEngine:
         """Clamp center x so crop box stays strictly within [0, orig_w]."""
         half_w = self.crop_w / 2.0
         return max(half_w, min(cx, self.orig_w - half_w))
+
+    def _clamp_center_y(self, cy: float) -> float:
+        """Clamp center y so crop box stays strictly within [0, orig_h]."""
+        half_h = self.crop_h / 2.0
+        return max(half_h, min(cy, self.orig_h - half_h))
 
     def update_frame(self, frame_idx: int,
                      face_candidates: Optional[List[Dict[str, Any]]] = None,
@@ -405,7 +426,8 @@ class ThreeZoneFramingEngine:
         min_hold_frames = int(round(self.config.min_hold_seconds * self.fps))
         can_switch_zone = (frame_idx - self.last_zone_switch_frame) >= min_hold_frames
 
-        deadzone_px = self.crop_w * self.config.deadzone_ratio
+        # Extended horizontal deadzone: ±15% of screen width
+        deadzone_px = self.orig_w * self.config.deadzone_ratio
 
         # 1. Action / Task Detection
         action_zone = None
@@ -424,7 +446,7 @@ class ThreeZoneFramingEngine:
         if action_zone is not None:
             # Action event takes priority for its duration (2 to 4 seconds)
             desired_zone = action_zone
-            desired_center = get_zone_nominal_center(action_zone, self.orig_w)
+            desired_center = get_zone_nominal_center(action_zone, self.orig_w, self.config)
         elif face_candidates and len(face_candidates) > 0:
             target_cand = None
             if active_speaker_idx is not None and 0 <= active_speaker_idx < len(face_candidates):
@@ -441,6 +463,32 @@ class ThreeZoneFramingEngine:
 
             box = target_cand['box']
             face_cx = box[0] + box[2] / 2.0
+
+            # Vertical Headroom Alignment (20%–30% from top of 9:16 canvas, avoiding head-chopping)
+            top_face_y = min(c['box'][1] for c in face_candidates)
+            target_headroom = 0.25  # Nominal 25% headroom
+            ideal_center_y = top_face_y + self.crop_h * (0.5 - target_headroom)
+            self.target_center_y = self._clamp_center_y(ideal_center_y)
+
+            # Multi-person dynamic expansion: if multiple participants are present
+            # and relatively balanced, anchor to the group center to prevent clipping
+            if len(face_candidates) > 1 and active_speaker_idx is None:
+                sorted_cands = sorted(
+                    face_candidates,
+                    key=lambda c: c.get('score', c['box'][2] * c['box'][3]),
+                    reverse=True
+                )
+                s0 = sorted_cands[0].get('score', sorted_cands[0]['box'][2] * sorted_cands[0]['box'][3])
+                s1 = sorted_cands[1].get('score', sorted_cands[1]['box'][2] * sorted_cands[1]['box'][3])
+                if s1 > 0.40 * s0:
+                    all_min_x = min(c['box'][0] for c in face_candidates)
+                    all_max_x = max(c['box'][0] + c['box'][2] for c in face_candidates)
+                    group_span = all_max_x - all_min_x
+                    group_mid = (all_min_x + all_max_x) / 2.0
+                    if group_span > self.crop_w * 0.90:
+                        self.rapid_dialogue_active = True
+                    face_cx = group_mid
+
             candidate_zone = get_zone_for_x(face_cx, self.orig_w, self.config)
 
             if candidate_zone != self.committed_zone:
@@ -532,6 +580,15 @@ class ThreeZoneFramingEngine:
                     (1.0 - self.ema_alpha) * self.current_center_x
                 )
 
+        dist_y = abs(self.target_center_y - self.current_center_y)
+        if dist_y < 1.0 or force_snap:
+            self.current_center_y = self.target_center_y
+        else:
+            self.current_center_y = (
+                self.ema_alpha * self.target_center_y +
+                (1.0 - self.ema_alpha) * self.current_center_y
+            )
+
         return self.get_current_crop_box()
 
     def get_current_crop_box(self) -> Tuple[int, int, int, int]:
@@ -540,7 +597,10 @@ class ThreeZoneFramingEngine:
         x1 = int(round(clamped_cx - self.crop_w / 2.0))
         x1 = max(0, min(x1, self.max_x))
         x1 -= x1 % 2
-        y1 = max(0, (self.orig_h - self.crop_h) // 2)
+
+        clamped_cy = self._clamp_center_y(self.current_center_y)
+        y1 = int(round(clamped_cy - self.crop_h / 2.0))
+        y1 = max(0, min(y1, self.orig_h - self.crop_h))
         y1 -= y1 % 2
         return x1, y1, self.crop_w, self.crop_h
 

@@ -4228,6 +4228,8 @@ async def get_clip_scenes(job_id: str, clip_index: int, request: Request):
                     thumb_name = f"temp_scene_{token}_{idx:03d}.jpg"
                     suggested = 0.5
                     suggested_y = 0.5
+                    detected_persons = []
+                    group_hull = None
                     if ok:
                         cv2.imwrite(os.path.join(output_dir, thumb_name), frame,
                                     [int(cv2.IMWRITE_JPEG_QUALITY), 80])
@@ -4236,6 +4238,39 @@ async def get_clip_scenes(job_id: str, clip_index: int, request: Request):
                         try:
                             faces = m.detect_face_candidates(frame)
                             if faces:
+                                for p_idx, f in enumerate(faces):
+                                    bx, by, bw, bh = f['box']
+                                    conf = round(float(f.get('confidence', 0.90)), 2)
+                                    detected_persons.append({
+                                        "id": p_idx + 1,
+                                        "x": round(max(0.0, min(1.0, bx / orig_w)), 4),
+                                        "y": round(max(0.0, min(1.0, by / orig_h)), 4),
+                                        "width": round(max(0.01, min(1.0, bw / orig_w)), 4),
+                                        "height": round(max(0.01, min(1.0, bh / orig_h)), 4),
+                                        "confidence": conf,
+                                    })
+
+                                # Dynamic Multi-Person Group Hull
+                                min_x = min(p["x"] for p in detected_persons)
+                                min_y = min(p["y"] for p in detected_persons)
+                                max_x = max(p["x"] + p["width"] for p in detected_persons)
+                                max_y = max(p["y"] + p["height"] for p in detected_persons)
+                                pad_x, pad_y = 0.05, 0.08
+                                p_min_x = max(0.0, min_x - pad_x)
+                                p_min_y = max(0.0, min_y - pad_y)
+                                p_max_x = min(1.0, max_x + pad_x)
+                                p_max_y = min(1.0, max_y + pad_y)
+                                group_hull = {
+                                    "minX": round(p_min_x, 4),
+                                    "minY": round(p_min_y, 4),
+                                    "maxX": round(p_max_x, 4),
+                                    "maxY": round(p_max_y, 4),
+                                    "width": round(p_max_x - p_min_x, 4),
+                                    "height": round(p_max_y - p_min_y, 4),
+                                    "centerX": round((p_min_x + p_max_x) / 2.0, 4),
+                                    "centerY": round((p_min_y + p_max_y) / 2.0, 4),
+                                }
+
                                 box = max(faces,
                                           key=lambda f: f['box'][2] * f['box'][3])['box']
                                 suggested = min(1.0, max(0.0,
@@ -4257,6 +4292,8 @@ async def get_clip_scenes(job_id: str, clip_index: int, request: Request):
                                           if thumb_name else None),
                         "suggested_center": round(suggested, 4),
                         "suggested_center_y": round(suggested_y, 4),
+                        "detected_persons": detected_persons,
+                        "group_hull": group_hull,
                     })
             return orig_w, orig_h, out, preview_name
         finally:
