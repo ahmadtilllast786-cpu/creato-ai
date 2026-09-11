@@ -1,0 +1,1455 @@
+{
+  "version": "1.0.0",
+  "categories": [
+    "creator_hype",
+    "documentary_cinematic",
+    "business_corporate",
+    "gaming_meme",
+    "aesthetic_minimal"
+  ],
+  "presets": [
+    {
+      "id": "mrbeast-energy",
+      "name": "MrBeast Energy",
+      "category": "creator_hype",
+      "description": "High-energy, fast-paced editing with aggressive cuts, frequent zooms, and bold text. Inspired by MrBeast/top YouTube creators.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.20,
+        "jumpCutFrequency": "high",
+        "bRollFrequencySec": [4, 8]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "frequent",
+        "zoomScale": 1.25,
+        "trackingSmoothing": 0.08
+      },
+      "captions": {
+        "fontFamily": "Anton",
+        "fontSize": 52,
+        "casing": "uppercase",
+        "wordsPerChunk": 2,
+        "activeWordColor": "#FFE500",
+        "baseColor": "#FFFFFF",
+        "strokeWidth": 4,
+        "animation": "pop",
+        "screenAnchor": { "x": 0.5, "y": 0.82 }
+      },
+      "assets": {
+        "sfxDensity": "high",
+        "sfxMaxPerMinute": 12,
+        "sfxCategories": ["whoosh", "pop", "cash", "slam"],
+        "stickerStyle": "emoji",
+        "stickerCategories": ["reactions", "arrows", "money"]
+      },
+      "colorGrade": {
+        "filterPreset": "contrast-boost",
+        "saturation": 1.15,
+        "vignette": 0.30
+      }
+    },
+    {
+      "id": "hormozi-authority",
+      "name": "Hormozi Authority",
+      "category": "creator_hype",
+      "description": "Clean, authoritative talking-head style. Minimal distractions, punchy 1-2 word captions, subtle zooms on key points.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.30,
+        "jumpCutFrequency": "medium",
+        "bRollFrequencySec": [10, 20]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "occasional",
+        "zoomScale": 1.12,
+        "trackingSmoothing": 0.07
+      },
+      "captions": {
+        "fontFamily": "Inter",
+        "fontSize": 56,
+        "casing": "uppercase",
+        "wordsPerChunk": 1,
+        "activeWordColor": "#FFFFFF",
+        "baseColor": "#A0A0A0",
+        "strokeWidth": 3,
+        "animation": "pop",
+        "screenAnchor": { "x": 0.5, "y": 0.50 }
+      },
+      "assets": {
+        "sfxDensity": "low",
+        "sfxMaxPerMinute": 3,
+        "sfxCategories": ["whoosh"],
+        "stickerStyle": "minimal-outline",
+        "stickerCategories": ["arrows"]
+      },
+      "colorGrade": {
+        "filterPreset": "clean-neutral",
+        "saturation": 1.02,
+        "vignette": 0.20
+      }
+    },
+    {
+      "id": "tiktok-viral",
+      "name": "TikTok Viral",
+      "category": "creator_hype",
+      "description": "Rapid-fire pacing with trendy fonts, bouncy animations, and dense sound effects for maximum scroll-stopping impact.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.15,
+        "jumpCutFrequency": "high",
+        "bRollFrequencySec": [3, 6]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "frequent",
+        "zoomScale": 1.30,
+        "trackingSmoothing": 0.10
+      },
+      "captions": {
+        "fontFamily": "Bangers",
+        "fontSize": 48,
+        "casing": "uppercase",
+        "wordsPerChunk": 2,
+        "activeWordColor": "#FF4444",
+        "baseColor": "#FFFFFF",
+        "strokeWidth": 5,
+        "animation": "bounce",
+        "screenAnchor": { "x": 0.5, "y": 0.78 }
+      },
+      "assets": {
+        "sfxDensity": "high",
+        "sfxMaxPerMinute": 15,
+        "sfxCategories": ["pop", "whoosh", "vine_boom", "ding"],
+        "stickerStyle": "emoji",
+        "stickerCategories": ["reactions", "fire", "skull"]
+      },
+      "colorGrade": {
+        "filterPreset": "vibrant-pop",
+        "saturation": 1.20,
+        "vignette": 0.15
+      }
+    },
+    {
+      "id": "youtube-shorts-punchy",
+      "name": "YouTube Shorts Punchy",
+      "category": "creator_hype",
+      "description": "Optimized for YouTube Shorts: balanced pacing, readable captions, moderate effects. Professional but engaging.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.30,
+        "jumpCutFrequency": "medium",
+        "bRollFrequencySec": [6, 12]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "occasional",
+        "zoomScale": 1.15,
+        "trackingSmoothing": 0.08
+      },
+      "captions": {
+        "fontFamily": "Montserrat",
+        "fontSize": 46,
+        "casing": "uppercase",
+        "wordsPerChunk": 3,
+        "activeWordColor": "#FFD700",
+        "baseColor": "#FFFFFF",
+        "strokeWidth": 4,
+        "animation": "pop",
+        "screenAnchor": { "x": 0.5, "y": 0.80 }
+      },
+      "assets": {
+        "sfxDensity": "medium",
+        "sfxMaxPerMinute": 6,
+        "sfxCategories": ["whoosh", "pop"],
+        "stickerStyle": "lottie-flat",
+        "stickerCategories": ["arrows", "highlights"]
+      },
+      "colorGrade": {
+        "filterPreset": "contrast-boost",
+        "saturation": 1.08,
+        "vignette": 0.25
+      }
+    },
+    {
+      "id": "podcast-clip-fire",
+      "name": "Podcast Clip Fire",
+      "category": "creator_hype",
+      "description": "Podcast highlight reel style with speaker tracking, reaction zooms, and karaoke-style word highlights.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.40,
+        "jumpCutFrequency": "low",
+        "bRollFrequencySec": [15, 30]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "occasional",
+        "zoomScale": 1.15,
+        "trackingSmoothing": 0.06
+      },
+      "captions": {
+        "fontFamily": "Anton",
+        "fontSize": 44,
+        "casing": "uppercase",
+        "wordsPerChunk": 2,
+        "activeWordColor": "#FFE500",
+        "baseColor": "#FFFFFF",
+        "strokeWidth": 4,
+        "animation": "pop",
+        "screenAnchor": { "x": 0.5, "y": 0.82 }
+      },
+      "assets": {
+        "sfxDensity": "low",
+        "sfxMaxPerMinute": 3,
+        "sfxCategories": ["whoosh"],
+        "stickerStyle": "minimal-outline",
+        "stickerCategories": ["quotes"]
+      },
+      "colorGrade": {
+        "filterPreset": "warm-film",
+        "saturation": 1.05,
+        "vignette": 0.30
+      }
+    },
+    {
+      "id": "reaction-king",
+      "name": "Reaction King",
+      "category": "creator_hype",
+      "description": "Exaggerated reaction-style editing with frequent zoom punches, loud SFX, and bold emoji stickers.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.20,
+        "jumpCutFrequency": "high",
+        "bRollFrequencySec": [3, 7]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "frequent",
+        "zoomScale": 1.30,
+        "trackingSmoothing": 0.10
+      },
+      "captions": {
+        "fontFamily": "Impact",
+        "fontSize": 50,
+        "casing": "uppercase",
+        "wordsPerChunk": 2,
+        "activeWordColor": "#FF0000",
+        "baseColor": "#FFFFFF",
+        "strokeWidth": 5,
+        "animation": "bounce",
+        "screenAnchor": { "x": 0.5, "y": 0.75 }
+      },
+      "assets": {
+        "sfxDensity": "high",
+        "sfxMaxPerMinute": 15,
+        "sfxCategories": ["vine_boom", "slam", "pop", "cash"],
+        "stickerStyle": "emoji",
+        "stickerCategories": ["skull", "fire", "100", "shocked"]
+      },
+      "colorGrade": {
+        "filterPreset": "contrast-boost",
+        "saturation": 1.18,
+        "vignette": 0.20
+      }
+    },
+    {
+      "id": "storytime-animated",
+      "name": "Storytime Animated",
+      "category": "creator_hype",
+      "description": "Narrative storytelling with moderate pacing, slide-in captions, and atmospheric sound design.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.35,
+        "jumpCutFrequency": "medium",
+        "bRollFrequencySec": [5, 10]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "occasional",
+        "zoomScale": 1.15,
+        "trackingSmoothing": 0.07
+      },
+      "captions": {
+        "fontFamily": "Poppins",
+        "fontSize": 42,
+        "casing": "capitalize",
+        "wordsPerChunk": 3,
+        "activeWordColor": "#4FC3F7",
+        "baseColor": "#FFFFFF",
+        "strokeWidth": 3,
+        "animation": "slide",
+        "screenAnchor": { "x": 0.5, "y": 0.80 }
+      },
+      "assets": {
+        "sfxDensity": "medium",
+        "sfxMaxPerMinute": 5,
+        "sfxCategories": ["whoosh", "cinematic_boom", "suspense"],
+        "stickerStyle": "lottie-flat",
+        "stickerCategories": ["narratives", "arrows"]
+      },
+      "colorGrade": {
+        "filterPreset": "warm-film",
+        "saturation": 1.08,
+        "vignette": 0.35
+      }
+    },
+    {
+      "id": "motivational-speaker",
+      "name": "Motivational Speaker",
+      "category": "creator_hype",
+      "description": "Inspirational speaking clips with dramatic zooms on key moments, bold single-word captions, and epic undertones.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.35,
+        "jumpCutFrequency": "medium",
+        "bRollFrequencySec": [8, 15]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "frequent",
+        "zoomScale": 1.20,
+        "trackingSmoothing": 0.06
+      },
+      "captions": {
+        "fontFamily": "Oswald",
+        "fontSize": 58,
+        "casing": "uppercase",
+        "wordsPerChunk": 1,
+        "activeWordColor": "#FFFFFF",
+        "baseColor": "#CCCCCC",
+        "strokeWidth": 4,
+        "animation": "pop",
+        "screenAnchor": { "x": 0.5, "y": 0.50 }
+      },
+      "assets": {
+        "sfxDensity": "medium",
+        "sfxMaxPerMinute": 4,
+        "sfxCategories": ["cinematic_boom", "whoosh", "rise"],
+        "stickerStyle": "minimal-outline",
+        "stickerCategories": ["fire", "crown"]
+      },
+      "colorGrade": {
+        "filterPreset": "contrast-boost",
+        "saturation": 1.10,
+        "vignette": 0.40
+      }
+    },
+    {
+      "id": "nature-documentary",
+      "name": "Nature Documentary",
+      "category": "documentary_cinematic",
+      "description": "David Attenborough-style with slow deliberate pacing, warm color grading, gentle pans, and elegant serif captions.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.80,
+        "jumpCutFrequency": "none",
+        "bRollFrequencySec": [8, 20]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "none",
+        "zoomScale": 1.05,
+        "trackingSmoothing": 0.05
+      },
+      "captions": {
+        "fontFamily": "Playfair Display",
+        "fontSize": 36,
+        "casing": "capitalize",
+        "wordsPerChunk": 5,
+        "activeWordColor": "#FFFFFF",
+        "baseColor": "#E0E0E0",
+        "strokeWidth": 2,
+        "animation": "fade",
+        "screenAnchor": { "x": 0.5, "y": 0.88 }
+      },
+      "assets": {
+        "sfxDensity": "none",
+        "sfxMaxPerMinute": 0,
+        "sfxCategories": [],
+        "stickerStyle": "minimal-outline",
+        "stickerCategories": []
+      },
+      "colorGrade": {
+        "filterPreset": "warm-film",
+        "saturation": 1.05,
+        "vignette": 0.35
+      }
+    },
+    {
+      "id": "true-crime",
+      "name": "True Crime",
+      "category": "documentary_cinematic",
+      "description": "Dark, suspenseful tone with muted colors, slow zooms, dramatic pauses, and serif captions with red accents.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.60,
+        "jumpCutFrequency": "low",
+        "bRollFrequencySec": [6, 15]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "occasional",
+        "zoomScale": 1.10,
+        "trackingSmoothing": 0.05
+      },
+      "captions": {
+        "fontFamily": "Crimson Text",
+        "fontSize": 38,
+        "casing": "capitalize",
+        "wordsPerChunk": 4,
+        "activeWordColor": "#CC0000",
+        "baseColor": "#DDDDDD",
+        "strokeWidth": 2,
+        "animation": "fade",
+        "screenAnchor": { "x": 0.5, "y": 0.85 }
+      },
+      "assets": {
+        "sfxDensity": "low",
+        "sfxMaxPerMinute": 2,
+        "sfxCategories": ["suspense", "cinematic_boom"],
+        "stickerStyle": "minimal-outline",
+        "stickerCategories": ["evidence", "redacted"]
+      },
+      "colorGrade": {
+        "filterPreset": "desaturated-noir",
+        "saturation": 0.85,
+        "vignette": 0.50
+      }
+    },
+    {
+      "id": "mini-documentary",
+      "name": "Mini Documentary",
+      "category": "documentary_cinematic",
+      "description": "Short-form documentary with balanced pacing, clean typography, and subtle cinematic polish.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.50,
+        "jumpCutFrequency": "low",
+        "bRollFrequencySec": [5, 12]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "occasional",
+        "zoomScale": 1.10,
+        "trackingSmoothing": 0.06
+      },
+      "captions": {
+        "fontFamily": "Source Sans Pro",
+        "fontSize": 38,
+        "casing": "capitalize",
+        "wordsPerChunk": 4,
+        "activeWordColor": "#FFD700",
+        "baseColor": "#FFFFFF",
+        "strokeWidth": 2,
+        "animation": "fade",
+        "screenAnchor": { "x": 0.5, "y": 0.85 }
+      },
+      "assets": {
+        "sfxDensity": "low",
+        "sfxMaxPerMinute": 2,
+        "sfxCategories": ["cinematic_boom", "whoosh"],
+        "stickerStyle": "minimal-outline",
+        "stickerCategories": ["data", "timeline"]
+      },
+      "colorGrade": {
+        "filterPreset": "warm-film",
+        "saturation": 1.06,
+        "vignette": 0.30
+      }
+    },
+    {
+      "id": "film-essay",
+      "name": "Film Essay",
+      "category": "documentary_cinematic",
+      "description": "Video essay style with thoughtful pacing, elegant transitions, and full-sentence caption blocks.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.60,
+        "jumpCutFrequency": "none",
+        "bRollFrequencySec": [4, 10]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "none",
+        "zoomScale": 1.05,
+        "trackingSmoothing": 0.05
+      },
+      "captions": {
+        "fontFamily": "Lora",
+        "fontSize": 34,
+        "casing": "capitalize",
+        "wordsPerChunk": 6,
+        "activeWordColor": "#E8D5B7",
+        "baseColor": "#C0C0C0",
+        "strokeWidth": 2,
+        "animation": "fade",
+        "screenAnchor": { "x": 0.5, "y": 0.88 }
+      },
+      "assets": {
+        "sfxDensity": "none",
+        "sfxMaxPerMinute": 0,
+        "sfxCategories": [],
+        "stickerStyle": "minimal-outline",
+        "stickerCategories": []
+      },
+      "colorGrade": {
+        "filterPreset": "cinematic-teal-orange",
+        "saturation": 1.04,
+        "vignette": 0.35
+      }
+    },
+    {
+      "id": "historical-deep-dive",
+      "name": "Historical Deep Dive",
+      "category": "documentary_cinematic",
+      "description": "Educational history content with sepia tones, measured pacing, and clean informational typography.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.55,
+        "jumpCutFrequency": "low",
+        "bRollFrequencySec": [6, 14]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "none",
+        "zoomScale": 1.08,
+        "trackingSmoothing": 0.05
+      },
+      "captions": {
+        "fontFamily": "Merriweather",
+        "fontSize": 36,
+        "casing": "capitalize",
+        "wordsPerChunk": 5,
+        "activeWordColor": "#D4A574",
+        "baseColor": "#E0D5C8",
+        "strokeWidth": 2,
+        "animation": "fade",
+        "screenAnchor": { "x": 0.5, "y": 0.87 }
+      },
+      "assets": {
+        "sfxDensity": "low",
+        "sfxMaxPerMinute": 1,
+        "sfxCategories": ["cinematic_boom"],
+        "stickerStyle": "minimal-outline",
+        "stickerCategories": ["dates", "maps"]
+      },
+      "colorGrade": {
+        "filterPreset": "sepia-warm",
+        "saturation": 0.90,
+        "vignette": 0.40
+      }
+    },
+    {
+      "id": "travel-vlog-cinematic",
+      "name": "Travel Vlog Cinematic",
+      "category": "documentary_cinematic",
+      "description": "Vibrant travel content with rich colors, smooth camera motion, ambient SFX, and clean modern captions.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.45,
+        "jumpCutFrequency": "low",
+        "bRollFrequencySec": [4, 10]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "occasional",
+        "zoomScale": 1.12,
+        "trackingSmoothing": 0.06
+      },
+      "captions": {
+        "fontFamily": "Raleway",
+        "fontSize": 38,
+        "casing": "capitalize",
+        "wordsPerChunk": 4,
+        "activeWordColor": "#FFFFFF",
+        "baseColor": "#D0D0D0",
+        "strokeWidth": 2,
+        "animation": "slide",
+        "screenAnchor": { "x": 0.5, "y": 0.85 }
+      },
+      "assets": {
+        "sfxDensity": "low",
+        "sfxMaxPerMinute": 2,
+        "sfxCategories": ["whoosh", "ambient"],
+        "stickerStyle": "minimal-outline",
+        "stickerCategories": ["location", "travel"]
+      },
+      "colorGrade": {
+        "filterPreset": "vibrant-pop",
+        "saturation": 1.15,
+        "vignette": 0.25
+      }
+    },
+    {
+      "id": "science-explainer",
+      "name": "Science Explainer",
+      "category": "documentary_cinematic",
+      "description": "Educational science content with clean visuals, moderate pacing, and highly readable sans-serif captions.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.45,
+        "jumpCutFrequency": "low",
+        "bRollFrequencySec": [5, 12]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "occasional",
+        "zoomScale": 1.10,
+        "trackingSmoothing": 0.06
+      },
+      "captions": {
+        "fontFamily": "Roboto",
+        "fontSize": 40,
+        "casing": "capitalize",
+        "wordsPerChunk": 4,
+        "activeWordColor": "#4ECDC4",
+        "baseColor": "#FFFFFF",
+        "strokeWidth": 3,
+        "animation": "fade",
+        "screenAnchor": { "x": 0.5, "y": 0.85 }
+      },
+      "assets": {
+        "sfxDensity": "low",
+        "sfxMaxPerMinute": 2,
+        "sfxCategories": ["pop", "whoosh"],
+        "stickerStyle": "lottie-flat",
+        "stickerCategories": ["diagrams", "atoms"]
+      },
+      "colorGrade": {
+        "filterPreset": "clean-neutral",
+        "saturation": 1.04,
+        "vignette": 0.20
+      }
+    },
+    {
+      "id": "linkedin-thought-leader",
+      "name": "LinkedIn Thought Leader",
+      "category": "business_corporate",
+      "description": "Professional, polished style for business content. Clean sans-serif font, minimal effects, authoritative tone.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.40,
+        "jumpCutFrequency": "low",
+        "bRollFrequencySec": [12, 25]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "none",
+        "zoomScale": 1.08,
+        "trackingSmoothing": 0.06
+      },
+      "captions": {
+        "fontFamily": "Inter",
+        "fontSize": 40,
+        "casing": "capitalize",
+        "wordsPerChunk": 4,
+        "activeWordColor": "#0A66C2",
+        "baseColor": "#FFFFFF",
+        "strokeWidth": 2,
+        "animation": "fade",
+        "screenAnchor": { "x": 0.5, "y": 0.85 }
+      },
+      "assets": {
+        "sfxDensity": "none",
+        "sfxMaxPerMinute": 0,
+        "sfxCategories": [],
+        "stickerStyle": "minimal-outline",
+        "stickerCategories": ["business"]
+      },
+      "colorGrade": {
+        "filterPreset": "clean-neutral",
+        "saturation": 1.02,
+        "vignette": 0.15
+      }
+    },
+    {
+      "id": "startup-pitch",
+      "name": "Startup Pitch",
+      "category": "business_corporate",
+      "description": "Modern tech startup presentation style. Bold metrics, clean visuals, energetic but professional.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.30,
+        "jumpCutFrequency": "medium",
+        "bRollFrequencySec": [6, 12]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "occasional",
+        "zoomScale": 1.12,
+        "trackingSmoothing": 0.07
+      },
+      "captions": {
+        "fontFamily": "Space Grotesk",
+        "fontSize": 44,
+        "casing": "capitalize",
+        "wordsPerChunk": 3,
+        "activeWordColor": "#6C5CE7",
+        "baseColor": "#FFFFFF",
+        "strokeWidth": 3,
+        "animation": "pop",
+        "screenAnchor": { "x": 0.5, "y": 0.82 }
+      },
+      "assets": {
+        "sfxDensity": "low",
+        "sfxMaxPerMinute": 3,
+        "sfxCategories": ["whoosh", "pop"],
+        "stickerStyle": "lottie-flat",
+        "stickerCategories": ["charts", "metrics"]
+      },
+      "colorGrade": {
+        "filterPreset": "clean-neutral",
+        "saturation": 1.05,
+        "vignette": 0.20
+      }
+    },
+    {
+      "id": "corporate-explainer",
+      "name": "Corporate Explainer",
+      "category": "business_corporate",
+      "description": "Enterprise-grade corporate communications. Conservative pacing, minimal effects, maximum clarity.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.50,
+        "jumpCutFrequency": "none",
+        "bRollFrequencySec": [10, 20]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "none",
+        "zoomScale": 1.05,
+        "trackingSmoothing": 0.05
+      },
+      "captions": {
+        "fontFamily": "Open Sans",
+        "fontSize": 38,
+        "casing": "capitalize",
+        "wordsPerChunk": 5,
+        "activeWordColor": "#2196F3",
+        "baseColor": "#FFFFFF",
+        "strokeWidth": 2,
+        "animation": "none",
+        "screenAnchor": { "x": 0.5, "y": 0.88 }
+      },
+      "assets": {
+        "sfxDensity": "none",
+        "sfxMaxPerMinute": 0,
+        "sfxCategories": [],
+        "stickerStyle": "minimal-outline",
+        "stickerCategories": []
+      },
+      "colorGrade": {
+        "filterPreset": "clean-neutral",
+        "saturation": 1.00,
+        "vignette": 0.10
+      }
+    },
+    {
+      "id": "finance-crypto",
+      "name": "Finance & Crypto",
+      "category": "business_corporate",
+      "description": "Financial content with neon green accents, dark theme, sharp cuts, and data-forward presentation.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.25,
+        "jumpCutFrequency": "medium",
+        "bRollFrequencySec": [5, 10]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "occasional",
+        "zoomScale": 1.15,
+        "trackingSmoothing": 0.08
+      },
+      "captions": {
+        "fontFamily": "Space Mono",
+        "fontSize": 42,
+        "casing": "uppercase",
+        "wordsPerChunk": 2,
+        "activeWordColor": "#00FF88",
+        "baseColor": "#FFFFFF",
+        "strokeWidth": 3,
+        "animation": "pop",
+        "screenAnchor": { "x": 0.5, "y": 0.80 }
+      },
+      "assets": {
+        "sfxDensity": "medium",
+        "sfxMaxPerMinute": 6,
+        "sfxCategories": ["cash", "pop", "whoosh"],
+        "stickerStyle": "lottie-flat",
+        "stickerCategories": ["charts", "money", "rocket"]
+      },
+      "colorGrade": {
+        "filterPreset": "dark-teal",
+        "saturation": 1.08,
+        "vignette": 0.30
+      }
+    },
+    {
+      "id": "real-estate-showcase",
+      "name": "Real Estate Showcase",
+      "category": "business_corporate",
+      "description": "Property listing style with smooth pans, warm tones, elegant typography, and minimal distractions.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.50,
+        "jumpCutFrequency": "none",
+        "bRollFrequencySec": [4, 10]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "occasional",
+        "zoomScale": 1.08,
+        "trackingSmoothing": 0.05
+      },
+      "captions": {
+        "fontFamily": "Cormorant Garamond",
+        "fontSize": 36,
+        "casing": "capitalize",
+        "wordsPerChunk": 5,
+        "activeWordColor": "#C9A96E",
+        "baseColor": "#FFFFFF",
+        "strokeWidth": 2,
+        "animation": "fade",
+        "screenAnchor": { "x": 0.5, "y": 0.88 }
+      },
+      "assets": {
+        "sfxDensity": "none",
+        "sfxMaxPerMinute": 0,
+        "sfxCategories": [],
+        "stickerStyle": "minimal-outline",
+        "stickerCategories": ["location"]
+      },
+      "colorGrade": {
+        "filterPreset": "warm-film",
+        "saturation": 1.06,
+        "vignette": 0.25
+      }
+    },
+    {
+      "id": "product-demo",
+      "name": "Product Demo",
+      "category": "business_corporate",
+      "description": "SaaS/product demo clips with crisp visuals, clean cuts, informative captions, and subtle zoom-ins on features.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.35,
+        "jumpCutFrequency": "low",
+        "bRollFrequencySec": [8, 16]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "occasional",
+        "zoomScale": 1.12,
+        "trackingSmoothing": 0.06
+      },
+      "captions": {
+        "fontFamily": "DM Sans",
+        "fontSize": 40,
+        "casing": "capitalize",
+        "wordsPerChunk": 4,
+        "activeWordColor": "#7C3AED",
+        "baseColor": "#FFFFFF",
+        "strokeWidth": 3,
+        "animation": "fade",
+        "screenAnchor": { "x": 0.5, "y": 0.85 }
+      },
+      "assets": {
+        "sfxDensity": "low",
+        "sfxMaxPerMinute": 2,
+        "sfxCategories": ["pop", "click"],
+        "stickerStyle": "lottie-flat",
+        "stickerCategories": ["ui-elements", "arrows"]
+      },
+      "colorGrade": {
+        "filterPreset": "clean-neutral",
+        "saturation": 1.03,
+        "vignette": 0.15
+      }
+    },
+    {
+      "id": "webinar-highlight",
+      "name": "Webinar Highlight",
+      "category": "business_corporate",
+      "description": "Best-of webinar clips with professional framing, speaker tracking, and clear sentence captions.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.45,
+        "jumpCutFrequency": "low",
+        "bRollFrequencySec": [15, 30]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "none",
+        "zoomScale": 1.08,
+        "trackingSmoothing": 0.05
+      },
+      "captions": {
+        "fontFamily": "Nunito",
+        "fontSize": 38,
+        "casing": "capitalize",
+        "wordsPerChunk": 5,
+        "activeWordColor": "#FF6B35",
+        "baseColor": "#FFFFFF",
+        "strokeWidth": 2,
+        "animation": "none",
+        "screenAnchor": { "x": 0.5, "y": 0.88 }
+      },
+      "assets": {
+        "sfxDensity": "none",
+        "sfxMaxPerMinute": 0,
+        "sfxCategories": [],
+        "stickerStyle": "minimal-outline",
+        "stickerCategories": []
+      },
+      "colorGrade": {
+        "filterPreset": "clean-neutral",
+        "saturation": 1.02,
+        "vignette": 0.15
+      }
+    },
+    {
+      "id": "twitch-clip-chaos",
+      "name": "Twitch Clip Chaos",
+      "category": "gaming_meme",
+      "description": "Chaotic Twitch clip energy with rapid zooms, vine booms, bass-boosted vibes, and oversized impact font.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.15,
+        "jumpCutFrequency": "high",
+        "bRollFrequencySec": [2, 5]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "frequent",
+        "zoomScale": 1.30,
+        "trackingSmoothing": 0.12
+      },
+      "captions": {
+        "fontFamily": "Impact",
+        "fontSize": 54,
+        "casing": "uppercase",
+        "wordsPerChunk": 2,
+        "activeWordColor": "#FF4444",
+        "baseColor": "#FFFFFF",
+        "strokeWidth": 5,
+        "animation": "bounce",
+        "screenAnchor": { "x": 0.5, "y": 0.75 }
+      },
+      "assets": {
+        "sfxDensity": "high",
+        "sfxMaxPerMinute": 18,
+        "sfxCategories": ["vine_boom", "slam", "bruh", "airhorn"],
+        "stickerStyle": "emoji",
+        "stickerCategories": ["skull", "100", "fire", "clown"]
+      },
+      "colorGrade": {
+        "filterPreset": "contrast-boost",
+        "saturation": 1.20,
+        "vignette": 0.15
+      }
+    },
+    {
+      "id": "rage-compilation",
+      "name": "Rage Compilation",
+      "category": "gaming_meme",
+      "description": "Rage moment montage with bass-heavy SFX, shaky zoom effects, red tinting, and aggressive uppercase text.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.15,
+        "jumpCutFrequency": "high",
+        "bRollFrequencySec": [2, 5]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "frequent",
+        "zoomScale": 1.30,
+        "trackingSmoothing": 0.15
+      },
+      "captions": {
+        "fontFamily": "Black Ops One",
+        "fontSize": 52,
+        "casing": "uppercase",
+        "wordsPerChunk": 1,
+        "activeWordColor": "#FF0000",
+        "baseColor": "#FFFFFF",
+        "strokeWidth": 5,
+        "animation": "bounce",
+        "screenAnchor": { "x": 0.5, "y": 0.70 }
+      },
+      "assets": {
+        "sfxDensity": "high",
+        "sfxMaxPerMinute": 20,
+        "sfxCategories": ["vine_boom", "slam", "explosion", "bruh"],
+        "stickerStyle": "emoji",
+        "stickerCategories": ["skull", "rage", "fire"]
+      },
+      "colorGrade": {
+        "filterPreset": "red-rage",
+        "saturation": 1.25,
+        "vignette": 0.15
+      }
+    },
+    {
+      "id": "gaming-tutorial",
+      "name": "Gaming Tutorial",
+      "category": "gaming_meme",
+      "description": "Educational gaming content with balanced pacing, clear captions, and occasional zoom-ins on game elements.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.35,
+        "jumpCutFrequency": "medium",
+        "bRollFrequencySec": [6, 14]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "occasional",
+        "zoomScale": 1.15,
+        "trackingSmoothing": 0.08
+      },
+      "captions": {
+        "fontFamily": "Exo 2",
+        "fontSize": 42,
+        "casing": "capitalize",
+        "wordsPerChunk": 3,
+        "activeWordColor": "#00E676",
+        "baseColor": "#FFFFFF",
+        "strokeWidth": 3,
+        "animation": "pop",
+        "screenAnchor": { "x": 0.5, "y": 0.82 }
+      },
+      "assets": {
+        "sfxDensity": "medium",
+        "sfxMaxPerMinute": 5,
+        "sfxCategories": ["pop", "whoosh", "ding"],
+        "stickerStyle": "lottie-flat",
+        "stickerCategories": ["arrows", "highlights", "keys"]
+      },
+      "colorGrade": {
+        "filterPreset": "clean-neutral",
+        "saturation": 1.08,
+        "vignette": 0.20
+      }
+    },
+    {
+      "id": "esports-highlight",
+      "name": "Esports Highlight",
+      "category": "gaming_meme",
+      "description": "Competitive gaming highlight reel with fast cuts, neon colors, tech-style font, and energetic transitions.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.20,
+        "jumpCutFrequency": "high",
+        "bRollFrequencySec": [3, 7]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "frequent",
+        "zoomScale": 1.25,
+        "trackingSmoothing": 0.10
+      },
+      "captions": {
+        "fontFamily": "Orbitron",
+        "fontSize": 44,
+        "casing": "uppercase",
+        "wordsPerChunk": 2,
+        "activeWordColor": "#00FFFF",
+        "baseColor": "#FFFFFF",
+        "strokeWidth": 4,
+        "animation": "slide",
+        "screenAnchor": { "x": 0.5, "y": 0.78 }
+      },
+      "assets": {
+        "sfxDensity": "high",
+        "sfxMaxPerMinute": 10,
+        "sfxCategories": ["whoosh", "slam", "cinematic_boom", "ding"],
+        "stickerStyle": "lottie-flat",
+        "stickerCategories": ["hud", "crosshair", "stats"]
+      },
+      "colorGrade": {
+        "filterPreset": "neon-cyberpunk",
+        "saturation": 1.15,
+        "vignette": 0.25
+      }
+    },
+    {
+      "id": "reddit-story",
+      "name": "Reddit Story",
+      "category": "gaming_meme",
+      "description": "Reddit AITA/TIFU narration style with Minecraft parkour background energy, clear word-by-word captions.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.25,
+        "jumpCutFrequency": "medium",
+        "bRollFrequencySec": [8, 20]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "occasional",
+        "zoomScale": 1.12,
+        "trackingSmoothing": 0.08
+      },
+      "captions": {
+        "fontFamily": "Noto Sans",
+        "fontSize": 46,
+        "casing": "capitalize",
+        "wordsPerChunk": 2,
+        "activeWordColor": "#FF4500",
+        "baseColor": "#FFFFFF",
+        "strokeWidth": 4,
+        "animation": "pop",
+        "screenAnchor": { "x": 0.5, "y": 0.50 }
+      },
+      "assets": {
+        "sfxDensity": "medium",
+        "sfxMaxPerMinute": 4,
+        "sfxCategories": ["pop", "whoosh"],
+        "stickerStyle": "emoji",
+        "stickerCategories": ["reactions", "reddit"]
+      },
+      "colorGrade": {
+        "filterPreset": "clean-neutral",
+        "saturation": 1.05,
+        "vignette": 0.15
+      }
+    },
+    {
+      "id": "meme-edit",
+      "name": "Meme Edit",
+      "category": "gaming_meme",
+      "description": "Maximum meme energy: distorted zooms, vine booms, deep-fried color grading, and ironic impact font.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.10,
+        "jumpCutFrequency": "high",
+        "bRollFrequencySec": [1, 4]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "frequent",
+        "zoomScale": 1.30,
+        "trackingSmoothing": 0.15
+      },
+      "captions": {
+        "fontFamily": "Impact",
+        "fontSize": 56,
+        "casing": "uppercase",
+        "wordsPerChunk": 1,
+        "activeWordColor": "#FF0000",
+        "baseColor": "#FFFF00",
+        "strokeWidth": 6,
+        "animation": "bounce",
+        "screenAnchor": { "x": 0.5, "y": 0.50 }
+      },
+      "assets": {
+        "sfxDensity": "high",
+        "sfxMaxPerMinute": 25,
+        "sfxCategories": ["vine_boom", "bruh", "airhorn", "oof", "fart"],
+        "stickerStyle": "emoji",
+        "stickerCategories": ["skull", "clown", "100", "crying"]
+      },
+      "colorGrade": {
+        "filterPreset": "deep-fried",
+        "saturation": 1.40,
+        "vignette": 0.10
+      }
+    },
+    {
+      "id": "speedrun-commentary",
+      "name": "Speedrun Commentary",
+      "category": "gaming_meme",
+      "description": "Fast-paced speedrun narration with timer overlays, quick cuts, and technical commentary captions.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.20,
+        "jumpCutFrequency": "high",
+        "bRollFrequencySec": [3, 8]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "frequent",
+        "zoomScale": 1.20,
+        "trackingSmoothing": 0.10
+      },
+      "captions": {
+        "fontFamily": "JetBrains Mono",
+        "fontSize": 40,
+        "casing": "lowercase",
+        "wordsPerChunk": 3,
+        "activeWordColor": "#FFD700",
+        "baseColor": "#00FF00",
+        "strokeWidth": 3,
+        "animation": "pop",
+        "screenAnchor": { "x": 0.5, "y": 0.80 }
+      },
+      "assets": {
+        "sfxDensity": "medium",
+        "sfxMaxPerMinute": 8,
+        "sfxCategories": ["ding", "pop", "whoosh"],
+        "stickerStyle": "lottie-flat",
+        "stickerCategories": ["timer", "splits"]
+      },
+      "colorGrade": {
+        "filterPreset": "clean-neutral",
+        "saturation": 1.10,
+        "vignette": 0.15
+      }
+    },
+    {
+      "id": "clean-minimalist",
+      "name": "Clean Minimalist",
+      "category": "aesthetic_minimal",
+      "description": "Ultra-clean aesthetic with zero SFX, subtle fade captions, and muted neutral color palette.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.50,
+        "jumpCutFrequency": "none",
+        "bRollFrequencySec": [10, 25]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "none",
+        "zoomScale": 1.05,
+        "trackingSmoothing": 0.05
+      },
+      "captions": {
+        "fontFamily": "Helvetica Neue",
+        "fontSize": 34,
+        "casing": "lowercase",
+        "wordsPerChunk": 4,
+        "activeWordColor": "#333333",
+        "baseColor": "#888888",
+        "strokeWidth": 0,
+        "animation": "fade",
+        "screenAnchor": { "x": 0.5, "y": 0.88 }
+      },
+      "assets": {
+        "sfxDensity": "none",
+        "sfxMaxPerMinute": 0,
+        "sfxCategories": [],
+        "stickerStyle": "minimal-outline",
+        "stickerCategories": []
+      },
+      "colorGrade": {
+        "filterPreset": "clean-neutral",
+        "saturation": 0.95,
+        "vignette": 0.10
+      }
+    },
+    {
+      "id": "soft-pastel",
+      "name": "Soft Pastel",
+      "category": "aesthetic_minimal",
+      "description": "Dreamy pastel palette with gentle transitions, rounded soft fonts, and warm desaturated tones.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.55,
+        "jumpCutFrequency": "none",
+        "bRollFrequencySec": [8, 18]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "none",
+        "zoomScale": 1.05,
+        "trackingSmoothing": 0.05
+      },
+      "captions": {
+        "fontFamily": "Quicksand",
+        "fontSize": 36,
+        "casing": "lowercase",
+        "wordsPerChunk": 3,
+        "activeWordColor": "#F8BBD0",
+        "baseColor": "#FFFFFF",
+        "strokeWidth": 1,
+        "animation": "fade",
+        "screenAnchor": { "x": 0.5, "y": 0.85 }
+      },
+      "assets": {
+        "sfxDensity": "none",
+        "sfxMaxPerMinute": 0,
+        "sfxCategories": [],
+        "stickerStyle": "minimal-outline",
+        "stickerCategories": ["hearts", "stars"]
+      },
+      "colorGrade": {
+        "filterPreset": "soft-pastel",
+        "saturation": 0.88,
+        "vignette": 0.20
+      }
+    },
+    {
+      "id": "dark-mode-elegant",
+      "name": "Dark Mode Elegant",
+      "category": "aesthetic_minimal",
+      "description": "Sleek dark aesthetic with high-contrast white text, deep blacks, and premium minimalist feel.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.45,
+        "jumpCutFrequency": "low",
+        "bRollFrequencySec": [8, 16]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "occasional",
+        "zoomScale": 1.10,
+        "trackingSmoothing": 0.06
+      },
+      "captions": {
+        "fontFamily": "Sora",
+        "fontSize": 40,
+        "casing": "capitalize",
+        "wordsPerChunk": 3,
+        "activeWordColor": "#FFFFFF",
+        "baseColor": "#808080",
+        "strokeWidth": 0,
+        "animation": "fade",
+        "screenAnchor": { "x": 0.5, "y": 0.85 }
+      },
+      "assets": {
+        "sfxDensity": "none",
+        "sfxMaxPerMinute": 0,
+        "sfxCategories": [],
+        "stickerStyle": "minimal-outline",
+        "stickerCategories": []
+      },
+      "colorGrade": {
+        "filterPreset": "dark-contrast",
+        "saturation": 0.95,
+        "vignette": 0.40
+      }
+    },
+    {
+      "id": "vaporwave",
+      "name": "Vaporwave",
+      "category": "aesthetic_minimal",
+      "description": "Retro-futuristic aesthetic with pink/cyan palette, glitch effects, and nostalgic VHS-inspired look.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.40,
+        "jumpCutFrequency": "low",
+        "bRollFrequencySec": [6, 14]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "occasional",
+        "zoomScale": 1.12,
+        "trackingSmoothing": 0.08
+      },
+      "captions": {
+        "fontFamily": "Press Start 2P",
+        "fontSize": 32,
+        "casing": "uppercase",
+        "wordsPerChunk": 2,
+        "activeWordColor": "#FF6EC7",
+        "baseColor": "#00FFFF",
+        "strokeWidth": 2,
+        "animation": "slide",
+        "screenAnchor": { "x": 0.5, "y": 0.80 }
+      },
+      "assets": {
+        "sfxDensity": "low",
+        "sfxMaxPerMinute": 3,
+        "sfxCategories": ["retro", "synth"],
+        "stickerStyle": "emoji",
+        "stickerCategories": ["retro", "geometric"]
+      },
+      "colorGrade": {
+        "filterPreset": "vaporwave-pink-cyan",
+        "saturation": 1.25,
+        "vignette": 0.30
+      }
+    },
+    {
+      "id": "cottagecore",
+      "name": "Cottagecore",
+      "category": "aesthetic_minimal",
+      "description": "Warm, rustic aesthetic with golden tones, gentle pacing, handwritten-style fonts, and cozy vibes.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.60,
+        "jumpCutFrequency": "none",
+        "bRollFrequencySec": [8, 18]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "none",
+        "zoomScale": 1.05,
+        "trackingSmoothing": 0.05
+      },
+      "captions": {
+        "fontFamily": "Caveat",
+        "fontSize": 42,
+        "casing": "capitalize",
+        "wordsPerChunk": 4,
+        "activeWordColor": "#8D6E63",
+        "baseColor": "#EFEBE9",
+        "strokeWidth": 1,
+        "animation": "fade",
+        "screenAnchor": { "x": 0.5, "y": 0.85 }
+      },
+      "assets": {
+        "sfxDensity": "none",
+        "sfxMaxPerMinute": 0,
+        "sfxCategories": [],
+        "stickerStyle": "minimal-outline",
+        "stickerCategories": ["botanical", "nature"]
+      },
+      "colorGrade": {
+        "filterPreset": "warm-golden",
+        "saturation": 1.08,
+        "vignette": 0.35
+      }
+    },
+    {
+      "id": "lofi-study",
+      "name": "Lo-Fi Study",
+      "category": "aesthetic_minimal",
+      "description": "Chill study beats aesthetic with muted tones, grain texture, slow fades, and relaxed rounded fonts.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.60,
+        "jumpCutFrequency": "none",
+        "bRollFrequencySec": [10, 25]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "none",
+        "zoomScale": 1.05,
+        "trackingSmoothing": 0.05
+      },
+      "captions": {
+        "fontFamily": "Comfortaa",
+        "fontSize": 34,
+        "casing": "lowercase",
+        "wordsPerChunk": 4,
+        "activeWordColor": "#B39DDB",
+        "baseColor": "#E0E0E0",
+        "strokeWidth": 1,
+        "animation": "fade",
+        "screenAnchor": { "x": 0.5, "y": 0.85 }
+      },
+      "assets": {
+        "sfxDensity": "none",
+        "sfxMaxPerMinute": 0,
+        "sfxCategories": [],
+        "stickerStyle": "minimal-outline",
+        "stickerCategories": []
+      },
+      "colorGrade": {
+        "filterPreset": "muted-grain",
+        "saturation": 0.85,
+        "vignette": 0.30
+      }
+    },
+    {
+      "id": "wellness-mindfulness",
+      "name": "Wellness & Mindfulness",
+      "category": "aesthetic_minimal",
+      "description": "Calming wellness content with soft greens, gentle pacing, airy fonts, and peaceful atmosphere.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.70,
+        "jumpCutFrequency": "none",
+        "bRollFrequencySec": [10, 20]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "none",
+        "zoomScale": 1.05,
+        "trackingSmoothing": 0.05
+      },
+      "captions": {
+        "fontFamily": "Josefin Sans",
+        "fontSize": 36,
+        "casing": "capitalize",
+        "wordsPerChunk": 4,
+        "activeWordColor": "#81C784",
+        "baseColor": "#F5F5F5",
+        "strokeWidth": 1,
+        "animation": "fade",
+        "screenAnchor": { "x": 0.5, "y": 0.85 }
+      },
+      "assets": {
+        "sfxDensity": "none",
+        "sfxMaxPerMinute": 0,
+        "sfxCategories": [],
+        "stickerStyle": "minimal-outline",
+        "stickerCategories": ["nature", "zen"]
+      },
+      "colorGrade": {
+        "filterPreset": "soft-green-tint",
+        "saturation": 0.95,
+        "vignette": 0.25
+      }
+    },
+    {
+      "id": "asmr-whisper",
+      "name": "ASMR Whisper",
+      "category": "aesthetic_minimal",
+      "description": "ASMR-optimized with near-zero cuts, ultra-gentle fades, whisper-friendly fonts, and zero sound effects.",
+      "targetPacing": {
+        "silenceCutThresholdSec": 0.80,
+        "jumpCutFrequency": "none",
+        "bRollFrequencySec": [20, 40]
+      },
+      "cameraMotion": {
+        "zoomFrequency": "none",
+        "zoomScale": 1.03,
+        "trackingSmoothing": 0.05
+      },
+      "captions": {
+        "fontFamily": "Nunito",
+        "fontSize": 30,
+        "casing": "lowercase",
+        "wordsPerChunk": 5,
+        "activeWordColor": "#E1BEE7",
+        "baseColor": "#D0D0D0",
+        "strokeWidth": 0,
+        "animation": "fade",
+        "screenAnchor": { "x": 0.5, "y": 0.90 }
+      },
+      "assets": {
+        "sfxDensity": "none",
+        "sfxMaxPerMinute": 0,
+        "sfxCategories": [],
+        "stickerStyle": "minimal-outline",
+        "stickerCategories": []
+      },
+      "colorGrade": {
+        "filterPreset": "soft-pastel",
+        "saturation": 0.90,
+        "vignette": 0.20
+      }
+    }
+  ]
+}
