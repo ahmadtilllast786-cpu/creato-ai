@@ -213,9 +213,9 @@ class TestGenerateSubtitlesAss:
 
     def test_config_defaults_include_safe_boundaries(self):
         cfg = AutoEditConfig()
-        assert cfg.caption_margin_v == 320
-        assert cfg.caption_margin_l == 120
-        assert cfg.caption_margin_r == 140
+        assert cfg.caption_margin_v == 288   # 15% of 1920
+        assert cfg.caption_margin_l == 65    # 6% of 1080
+        assert cfg.caption_margin_r == 86    # 8% of 1080
         assert cfg.caption_font_size == 50
         assert cfg.caption_max_chars == 16
 

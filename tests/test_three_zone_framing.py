@@ -249,7 +249,7 @@ class TestStudioTripodStability:
         initial_x = engine.get_current_crop_box()[0]
 
         # Person is talking: micro-movements of head/lips (e.g. 960 -> 955 -> 966 -> 958)
-        # All within deadzone (~120px)
+        # All within deadzone (~154px at ±8% of 1920w)
         for frame in range(1, 45):
             jitter_cx = 960.0 + 15.0 * np.sin(frame * 0.3)
             cands = [{'box': [int(jitter_cx - 50), 200, 100, 100], 'score': 10000}]

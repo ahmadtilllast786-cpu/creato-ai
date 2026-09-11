@@ -348,6 +348,22 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     hi_inline = _hex_to_ass_inline(highlight_color)
     pri_inline = _hex_to_ass_inline(font_color)
 
+    # Dynamic font scaling: auto-shrink oversized blocks to fit within safe width
+    # Available text width = PlayResX - margins; 85% fill threshold
+    avail_w = 1080 - margin_l - margin_r
+    max_fill_w = avail_w * 0.85  # 85% of available width
+    char_width_factor = 0.55  # Approximate character width as fraction of font_size
+
+    def _scale_fs_for_block(block_text_len):
+        """Return ASS \\fs override prefix if block text would overflow, else ''."""
+        est_width = block_text_len * font_size * char_width_factor
+        if est_width > max_fill_w and block_text_len > 0:
+            ratio = max_fill_w / est_width
+            scaled_fs = max(int(font_size * 0.65), int(font_size * ratio))
+            if scaled_fs < font_size:
+                return f"{{\\fs{scaled_fs}}}"
+        return ""
+
     if style_mode == "karaoke":
         for block in blocks:
             for i, word in enumerate(block):
@@ -364,20 +380,26 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         parts.append(txt)
                 b_txt = " ".join(parts)
                 w_list = b_txt.split(" ")
-                if len(w_list) > 2 and len(" ".join(x["word"] for x in block)) > 13:
+                plain_len = len(" ".join(x["word"] for x in block))
+                if len(w_list) > 2 and plain_len > 10:
                     mid = len(w_list) // 2
                     b_txt = " ".join(w_list[:mid]) + "\\N" + " ".join(w_list[mid:])
-                events.append(f"Dialogue: 0,{ass_time(ev_start)},{ass_time(ev_end)},Default,,0,0,0,,{b_txt}")
+                # Apply dynamic font scaling if text is too wide
+                fs_prefix = _scale_fs_for_block(plain_len)
+                events.append(f"Dialogue: 0,{ass_time(ev_start)},{ass_time(ev_end)},Default,,0,0,0,,{fs_prefix}{b_txt}")
     else:
         for block in blocks:
             b_s = block[0]["start"]
             b_e = block[-1]["end"]
             b_txt = " ".join(x["word"] for x in block)
+            plain_len = len(b_txt)
             w_list = b_txt.split()
-            if len(w_list) > 2 and len(b_txt) > 13:
+            if len(w_list) > 2 and plain_len > 10:
                 mid = len(w_list) // 2
                 b_txt = " ".join(w_list[:mid]) + "\\N" + " ".join(w_list[mid:])
-            events.append(f"Dialogue: 0,{ass_time(b_s)},{ass_time(b_e)},Default,,0,0,0,,{b_txt}")
+            # Apply dynamic font scaling if text is too wide
+            fs_prefix = _scale_fs_for_block(plain_len)
+            events.append(f"Dialogue: 0,{ass_time(b_s)},{ass_time(b_e)},Default,,0,0,0,,{fs_prefix}{b_txt}")
 
     with open(output_ass_path, "w", encoding="utf-8-sig") as f:
         f.write(header + "\n".join(events) + "\n")
@@ -531,9 +553,9 @@ class AutoEditConfig:
     burn_subtitles: bool = True
     subtitles_style: Optional[str] = None
     subtitle_settings: Optional[Dict[str, Any]] = None  # User's preserved subtitle styling
-    caption_margin_v: int = 320  # Safe vertical margin from bottom edge (prevents overlap with platform UI)
-    caption_margin_l: int = 120  # Safe left margin (prevents text clipping on left edge)
-    caption_margin_r: int = 140  # Safe right margin (prevents overlap with right-side action buttons)
+    caption_margin_v: int = 288  # Safe vertical margin (15% of 1920 = 288px from bottom edge)
+    caption_margin_l: int = 65   # Safe left margin (6% of 1080 = ~65px)
+    caption_margin_r: int = 86   # Safe right margin (8% of 1080 = ~86px, accounts for platform action buttons)
     caption_font_size: int = 50  # Balanced font size in 1080x1920 space
     caption_max_chars: int = 16  # Short punchy lines (prevents vertical ballooning into main window)
 

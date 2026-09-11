@@ -317,6 +317,7 @@ def _analyze_trajectory(input_video, scenes_boundaries, scene_strategies,
     frame_number = 0
     current_scene_index = 0
     candidates = []
+    active_idx = None
     try:
         while True:
             buf = proc.stdout.read(frame_bytes)
@@ -350,6 +351,7 @@ def _analyze_trajectory(input_video, scenes_boundaries, scene_strategies,
                     # (see SmoothedCameraman.begin_scene).
                     tracker.reset()
                     cameraman.begin_scene()
+                    active_idx = None
                     if three_zone_engine:
                         three_zone_engine.reset()
 
@@ -359,19 +361,30 @@ def _analyze_trajectory(input_video, scenes_boundaries, scene_strategies,
                         cand['box'] = [int(v * scale) for v in cand['box']]
                         cand['score'] = cand['box'][2] * cand['box'][3]
                     target_box = tracker.get_target(candidates, frame_number, orig_w)
+                    active_idx = None
                     if target_box:
                         cameraman.update_target(target_box)
+                        if candidates:
+                            for c_i, c in enumerate(candidates):
+                                if c.get('box') == target_box:
+                                    active_idx = c_i
+                                    break
+                            if active_idx is None:
+                                candidates.insert(0, {'box': target_box, 'score': 100000})
+                                active_idx = 0
                     elif frame_number % m.YOLO_FALLBACK_STRIDE == 0 or cut:
                         person_box = m.detect_person_yolo(frame)
                         if person_box:
                             scaled_box = [int(v * scale) for v in person_box]
                             cameraman.update_target(scaled_box)
                             candidates = [{'box': scaled_box, 'score': 1000}]
+                            active_idx = 0
 
                 if use_three_zone and three_zone_engine:
                     x1, _y1, _cw, _ch = three_zone_engine.update_frame(
                         frame_idx=frame_number,
                         face_candidates=candidates if candidates else None,
+                        active_speaker_idx=active_idx,
                         frame_image=frame,
                         force_snap=is_scene_start
                     )

@@ -398,6 +398,12 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     else:
         active_prefix = f"{{\\c{highlight_inline}}}"
 
+    # Safe zone margins: 6% left, 8% right (scaled to PlayResY=288 coordinate space)
+    # PlayResY=288 → implicit PlayResX=512 (16:9). For 9:16 vertical (1080x1920),
+    # the ASS renderer scales proportionally, so we use small pixel values.
+    safe_margin_l = 10  # ~6% of effective width in 288p space
+    safe_margin_r = 13  # ~8% of effective width in 288p space
+
     header = (
         "[Script Info]\n"
         "ScriptType: v4.00+\n"
@@ -412,11 +418,26 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
         f"Style: Default,{safe_font},{final_fontsize},{primary_colour},{primary_colour},"
         f"{outline_colour},{back_colour},1,0,0,0,100,100,0,0,{border_style},"
-        f"{outline_width},0,{ass_alignment},10,10,{int(_clamp_number(margin_v, 0, 200, SAFE_MARGIN_V))},1\n"
+        f"{outline_width},0,{ass_alignment},{safe_margin_l},{safe_margin_r},{int(_clamp_number(margin_v, 0, 200, SAFE_MARGIN_V))},1\n"
         "\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
+
+    # Dynamic font scaling: auto-shrink oversized blocks to fit within safe width
+    # Effective width in 288p space ≈ 162 (9:16 at PlayResY=288)
+    eff_w_288 = 162 - safe_margin_l - safe_margin_r  # ~139px available
+    max_fill_288 = eff_w_288 * 0.85
+    char_w_factor = 0.55
+
+    def _scale_fs_prefix(plain_text_len):
+        est_w = plain_text_len * final_fontsize * char_w_factor
+        if est_w > max_fill_288 and plain_text_len > 0:
+            ratio = max_fill_288 / est_w
+            scaled = max(int(final_fontsize * 0.65), int(final_fontsize * ratio))
+            if scaled < final_fontsize:
+                return f"{{\\fs{scaled}}}"
+        return ""
 
     events = []
     for block in blocks:
@@ -429,18 +450,23 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
                 continue
 
             parts = []
+            plain_text = []
             for j, other in enumerate(block):
                 text = _escape_ass_text(other['word'])
                 if uppercase:
                     text = text.upper()
+                plain_text.append(text)
                 if j == i:
                     parts.append(f"{active_prefix}{text}{{\\r}}")
                 else:
                     parts.append(text)
 
+            # Apply dynamic font scaling if text is too wide
+            fs_prefix = _scale_fs_prefix(len(" ".join(plain_text)))
+
             events.append(
                 f"Dialogue: 0,{_ass_time(ev_start)},{_ass_time(ev_end)},Default,,0,0,0,,"
-                f"{seam_prefix(ev_start)}{' '.join(parts)}"
+                f"{seam_prefix(ev_start)}{fs_prefix}{' '.join(parts)}"
             )
 
     if not events:

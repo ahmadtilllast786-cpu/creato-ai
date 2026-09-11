@@ -227,6 +227,12 @@ class SmoothedCameraman:
         """
         Returns the (x1, y1, x2, y2) for the current frame.
         """
+        prev_cx = self.current_center_x
+        prev_cy = getattr(self, 'current_center_y', self.video_height / 2.0)
+        # Max pan velocity: 2.5% of frame width per frame
+        max_step_x = self.video_width * 0.025
+        max_step_y = self.video_height * 0.025
+
         if force_snap:
             self.current_center_x = self.target_center_x
             self.current_center_y = getattr(self, 'target_center_y', self.video_height / 2.0)
@@ -261,10 +267,36 @@ class SmoothedCameraman:
                 diff_y = self.target_center_y - self.current_center_y
                 if abs(diff_y) > 2.0:
                     self.current_center_y += (1 if diff_y > 0 else -1) * 3.0
-                
-        # Clamp center
+
+        # Velocity clamping: cap per-frame displacement at 2.5% of frame
+        # Skip during force_snap (intentional instant cut, not dampened)
+        if not force_snap:
+            delta_x = self.current_center_x - prev_cx
+            if abs(delta_x) > max_step_x:
+                import math
+                self.current_center_x = prev_cx + math.copysign(max_step_x, delta_x)
+            delta_y = self.current_center_y - prev_cy
+            if abs(delta_y) > max_step_y:
+                import math
+                self.current_center_y = prev_cy + math.copysign(max_step_y, delta_y)
+
+        # Soft boundary deceleration: smoothly decelerate near edges
+        # Skip during force_snap (instant cut to target)
         half_crop = self.crop_width / 2
-        
+        if not force_snap:
+            min_cx = half_crop
+            max_cx = self.video_width - half_crop
+            soft_margin_x = (max_cx - min_cx) * 0.05 if max_cx > min_cx else 1.0
+
+            dx = self.current_center_x - prev_cx
+            if self.current_center_x < min_cx + soft_margin_x and dx < 0 and soft_margin_x > 0:
+                t = max(0.0, (self.current_center_x - min_cx) / soft_margin_x)
+                self.current_center_x = prev_cx + dx * (0.5 + 0.5 * t)
+            if self.current_center_x > max_cx - soft_margin_x and dx > 0 and soft_margin_x > 0:
+                t = max(0.0, (max_cx - self.current_center_x) / soft_margin_x)
+                self.current_center_x = prev_cx + dx * (0.5 + 0.5 * t)
+
+        # Clamp center (final safety)
         if self.current_center_x - half_crop < 0:
             self.current_center_x = half_crop
         if self.current_center_x + half_crop > self.video_width:
