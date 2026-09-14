@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Loader2, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { detectBurnedInCaptions } from '../lib/captionDetector';
