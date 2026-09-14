@@ -201,8 +201,10 @@ Self-hosting OpenShorts is free. You provide the machine and you only pay for th
 
 ### 1. Clone
 ```bash
-git clone https://github.com/mutonby/openshorts.git
-cd OpenShorts
+git clone https://github.com/ahmadtilllast786-cpu/creato-ai.git
+cd creato-ai
+# Test the tracking/clip-controls slice before it is merged to main:
+git switch --track -c feat/tracking-controls-v1 origin/feat/tracking-controls-v1
 ```
 
 ### 2. Configure (optional)
