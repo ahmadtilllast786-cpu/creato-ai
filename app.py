@@ -2310,6 +2310,7 @@ async def process_endpoint(
     target_clips: Optional[str] = Form(None),
     clip_min_seconds: Optional[str] = Form(None),
     clip_max_seconds: Optional[str] = Form(None),
+    track_scan_zones: Optional[str] = Form(None),
     auto_hook: Optional[str] = Form(None),
     auto_hook_style: Optional[str] = Form(None),
     thumbnail_session_id: Optional[str] = Form(None),
@@ -2344,6 +2345,7 @@ async def process_endpoint(
         target_clips = body.get("target_clips")
         clip_min_seconds = body.get("clip_min_seconds")
         clip_max_seconds = body.get("clip_max_seconds")
+        track_scan_zones = body.get("track_scan_zones")
         auto_hook = body.get("auto_hook")
         auto_hook_style = body.get("auto_hook_style")
         thumbnail_session_id = body.get("thumbnail_session_id")
@@ -2481,10 +2483,10 @@ async def process_endpoint(
 
     # Manual generation controls (discussion #65): optional clip-count target
     # and duration band, forwarded to the selection prompts via the same env
-    # overrides the A/B harness already reads (clip_selection.py). All three
+    # overrides the A/B harness already reads (clip_selection.py). Clip counts
     # are honest TARGETS, not guarantees — the model may return fewer clips
-    # when the material doesn't hold them. Bad values 400 instead of silently
-    # producing something the user didn't ask for.
+    # when the material doesn't hold them. Tracking scan bands are bounded so
+    # a bad request cannot silently make the detector unstable.
     def _gen_control(raw, name, lo, hi, integer=False):
         if raw in (None, ""):
             return None
@@ -2502,6 +2504,7 @@ async def process_endpoint(
     n_clips = _gen_control(target_clips, "target_clips", 1, 15, integer=True)
     min_secs = _gen_control(clip_min_seconds, "clip_min_seconds", 5, 175)
     max_secs = _gen_control(clip_max_seconds, "clip_max_seconds", 10, 180)
+    scan_zones = _gen_control(track_scan_zones, "track_scan_zones", 3, 7, integer=True)
     if min_secs is not None and max_secs is not None and max_secs < min_secs + 5:
         raise HTTPException(status_code=400,
                             detail="clip_max_seconds must be at least 5s above clip_min_seconds")
@@ -2511,8 +2514,10 @@ async def process_endpoint(
         env["CLIP_MIN_SECONDS"] = str(min_secs)
     if max_secs is not None:
         env["CLIP_MAX_SECONDS"] = str(max_secs)
-    if n_clips is not None or min_secs is not None or max_secs is not None:
-        print(f"[gen-controls] job={job_id} clips={n_clips} band={min_secs}-{max_secs}")
+    if scan_zones is not None:
+        env["TRACK_SCAN_ZONES"] = str(scan_zones)
+    if n_clips is not None or min_secs is not None or max_secs is not None or scan_zones is not None:
+        print(f"[gen-controls] job={job_id} clips={n_clips} band={min_secs}-{max_secs} scan_zones={scan_zones}")
 
     # captions=false: the source already carries burned-in subtitles (or the
     # caller adds its own later), so skip the free auto-caption pass instead

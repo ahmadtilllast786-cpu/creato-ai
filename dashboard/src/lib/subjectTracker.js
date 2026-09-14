@@ -30,6 +30,9 @@ export const SCANNING_ZONE = {
   maxX: 0.80,
   centerX: 0.50,
   width: 0.60,
+  // The backend can tune this from 3–7; the overlay mirrors that setting.
+  // Keeping the default at three preserves the existing preview appearance.
+  count: 3,
 };
 
 /**
@@ -294,26 +297,31 @@ export function renderTrackingLayers(
     const scanMinX = (state.scanZone?.minX ?? 0.20) * width;
     const scanMaxX = (state.scanZone?.maxX ?? 0.80) * width;
     const scanW = scanMaxX - scanMinX;
+    const scanCount = Math.max(3, Math.min(7, Math.round(state.scanZone?.count ?? 3)));
 
     ctx.save();
     // Translucent soft blue coverage envelope
     ctx.fillStyle = 'rgba(59, 130, 246, 0.04)';
     ctx.fillRect(scanMinX, 0, scanW, height);
 
-    // Left scanning boundary line (X: 20%)
+    // Flexible scan boundaries. Three lines is the default (left/center/right
+    // focus); denser bands keep side objects visible when the user opts in.
     ctx.strokeStyle = 'rgba(59, 130, 246, 0.65)';
     ctx.lineWidth = 1.5;
     ctx.setLineDash([6, 4]);
     ctx.beginPath();
-    ctx.moveTo(scanMinX, 0);
-    ctx.lineTo(scanMinX, height);
-    // Right scanning boundary line (X: 80%)
-    ctx.moveTo(scanMaxX, 0);
-    ctx.lineTo(scanMaxX, height);
+    const midX = width * 0.50;
+    for (let i = 0; i < scanCount; i += 1) {
+      const x = scanMinX + (scanW * i) / (scanCount - 1);
+      // Draw the center axis below with a lighter dash pattern, as in the
+      // original three-line overlay, instead of painting it twice.
+      if (Math.abs(x - midX) < 0.001 * width) continue;
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, height);
+    }
     ctx.stroke();
 
     // Center focus axis (X: 50%)
-    const midX = width * 0.50;
     ctx.strokeStyle = 'rgba(59, 130, 246, 0.35)';
     ctx.setLineDash([2, 4]);
     ctx.beginPath();
@@ -323,7 +331,7 @@ export function renderTrackingLayers(
     ctx.setLineDash([]);
 
     // Scanning zone top pill
-    const scanTag = 'CENTER FOCUS BAND (20% - 80%)';
+    const scanTag = `${scanCount} SCAN BANDS (20% - 80%)`;
     ctx.font = 'bold 9px monospace';
     const tagW = ctx.measureText(scanTag).width + 12;
     ctx.fillStyle = 'rgba(59, 130, 246, 0.85)';

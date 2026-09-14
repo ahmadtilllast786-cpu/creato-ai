@@ -27,6 +27,7 @@ import punch_in
 import screencast_layout
 import layout_ranges
 import split_layout
+from tracking import stabilize_crop_path
 from ffmpeg_utils import (video_encode_args, escape_filter_value, QUALITY_FAST,
                           BROADCAST, METADATA_SCRUB, run_ffmpeg_command, open_video_capture,
                           ensure_file_unlocked, cleanup_temp_file)
@@ -360,7 +361,7 @@ def _analyze_trajectory(input_video, scenes_boundaries, scene_strategies,
                     for cand in candidates:
                         cand['box'] = [int(v * scale) for v in cand['box']]
                         cand['score'] = cand['box'][2] * cand['box'][3]
-                    target_box = tracker.get_target(candidates, frame_number, orig_w)
+                    target_box = tracker.get_target(candidates, frame_number, orig_w, orig_h)
                     active_idx = None
                     if target_box:
                         cameraman.update_target(target_box)
@@ -584,6 +585,41 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
             xs, strategies, scene_boundaries, crop_overrides, crop_w,
             orig_w, orig_h=orig_h, splits=splits)
         print(f"   ✋ Manual framing on {len(crop_overrides)} scene(s)")
+
+    # Detector boxes can still produce an isolated crop spike even after the
+    # cameraman EMA. Filter the final trajectory per scene and cap its velocity
+    # so every emitted frame stays stable. Scene-cut first frames remain snaps;
+    # static layouts and intentional speaker cuts are left untouched.
+    try:
+        tracking_window = max(int(os.environ.get("TRACK_STABILIZATION_WINDOW", "5")), 1)
+    except (TypeError, ValueError):
+        tracking_window = 5
+    try:
+        tracking_max_step = float(os.environ.get("TRACK_MAX_STEP_RATIO", "0.02"))
+    except (TypeError, ValueError):
+        tracking_max_step = 0.02
+    try:
+        tracking_outlier = float(os.environ.get("TRACK_OUTLIER_RATIO", "0.06"))
+    except (TypeError, ValueError):
+        tracking_outlier = 0.06
+    before_stabilization = list(xs)
+    xs = stabilize_crop_path(
+        xs,
+        scene_boundaries,
+        strategies,
+        orig_w,
+        crop_w,
+        window=tracking_window,
+        max_step_ratio=tracking_max_step,
+        outlier_ratio=tracking_outlier,
+    )
+    corrected_frames = sum(
+        before != after
+        for before, after in zip(before_stabilization, xs)
+        if before is not None and after is not None
+    )
+    if corrected_frames:
+        print(f"   🧭 Stabilized camera path on {corrected_frames} frame(s)")
 
     ranges = scene_frame_ranges(scene_boundaries, strategies, len(xs))
     if not ranges:

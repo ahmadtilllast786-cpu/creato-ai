@@ -22,8 +22,28 @@ Features:
 from dataclasses import dataclass, field
 from enum import IntEnum
 import math
+import os
 from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
+from tracking import scan_boundaries
+
+
+def _env_int(name: str, default: int, low: int, high: int) -> int:
+    """Read a bounded integer tuning knob without making bad env break renders."""
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(low, min(high, value))
+
+
+def _env_float(name: str, default: float, low: float, high: float) -> float:
+    """Read a bounded float tuning knob without making bad env break renders."""
+    try:
+        value = float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(low, min(high, value))
 
 
 class Zone(IntEnum):
@@ -39,6 +59,13 @@ class ThreeZoneConfig:
     left_boundary: float = 0.20
     right_boundary: float = 0.80
 
+    # Motion/context scanning bands. The director still collapses these into
+    # LEFT/CENTER/RIGHT decisions, but 3–7 bands preserve narrow side objects
+    # that would otherwise disappear inside a broad middle slice.
+    scan_zone_count: int = field(
+        default_factory=lambda: _env_int("TRACK_SCAN_ZONES", 3, 3, 7)
+    )
+
     # Minimum time to hold any zone before allowing an intra-scene camera move
     min_hold_seconds: float = 2.0
 
@@ -52,6 +79,12 @@ class ThreeZoneConfig:
 
     # Sticky speaker bonus to prevent jitter / jumping between people in a group
     sticky_speaker_bonus: float = 2.5
+
+    # Minimum relative motion/face score for treating a second person as a
+    # balanced group instead of noise. Env-overridable for different genres.
+    group_balance_ratio: float = field(
+        default_factory=lambda: _env_float("TRACK_GROUP_BALANCE_RATIO", 0.40, 0.10, 0.95)
+    )
 
     # Switch mode: 'cut' (discrete 1-frame hard snap), 'pan' (cubic ease pan), or 'ema'
     switch_mode: str = "ema"
@@ -221,23 +254,21 @@ class ActionDetector:
 
         diff_masked = diff * mask
 
-        # Segment diff into the three vertical zones
-        w_left = int(w * self.config.left_boundary)
-        w_right = int(w * self.config.right_boundary)
-
         # Focus especially on middle and lower 70% of frame where hands and objects appear
         y_start = int(h * 0.25)
 
-        zone_diffs = {
-            Zone.LEFT: diff_masked[y_start:, :w_left],
-            Zone.CENTER: diff_masked[y_start:, w_left:w_right],
-            Zone.RIGHT: diff_masked[y_start:, w_right:]
-        }
-
-        # Calculate mean motion in each zone
-        zone_energy = {}
-        for z, patch in zone_diffs.items():
-            zone_energy[z] = float(np.mean(patch)) if patch.size > 0 else 0.0
+        # Scan configurable narrow bands first, then fold their energy into
+        # the public three editorial zones. This catches an object near a side
+        # edge while preserving the existing director API and hysteresis.
+        zone_energy = {Zone.LEFT: 0.0, Zone.CENTER: 0.0, Zone.RIGHT: 0.0}
+        boundaries = scan_boundaries(w, self.config.scan_zone_count)
+        for left, right in zip(boundaries, boundaries[1:]):
+            patch = diff_masked[y_start:, left:right]
+            if patch.size == 0:
+                continue
+            midpoint = (left + right) / 2.0
+            zone = get_zone_for_x(midpoint, w, self.config)
+            zone_energy[zone] = max(zone_energy[zone], float(np.mean(patch)))
 
         # Check if an existing action hold is still active
         if self.active_action_zone is not None:
@@ -581,7 +612,7 @@ class ThreeZoneFramingEngine:
                 )
                 s0 = sorted_cands[0].get('score', sorted_cands[0]['box'][2] * sorted_cands[0]['box'][3])
                 s1 = sorted_cands[1].get('score', sorted_cands[1]['box'][2] * sorted_cands[1]['box'][3])
-                if s1 > 0.40 * s0:
+                if s1 > self.config.group_balance_ratio * s0:
                     is_balanced_group = True
 
             if is_balanced_group:

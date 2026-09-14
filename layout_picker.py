@@ -38,8 +38,9 @@ and doubling the frames made it slightly worse rather than better. At 1024px the
 difference from sending the whole video sits inside the run-to-run variance the
 whole-video mode already has, at 2.2s per clip instead of ~15s.
 
-Off by default (``AUTO_LAYOUT=1``). A caller that already switched layouts on
-by hand wins: this only ever ADDS, so an explicit choice is never overridden.
+On by default (``AUTO_LAYOUT=1``); set ``AUTO_LAYOUT=0`` to disable. A caller
+that already switched layouts on by hand wins: this only ever ADDS, so an
+explicit choice is never overridden.
 """
 import json
 import os
@@ -53,7 +54,7 @@ from ffmpeg_utils import open_video_capture
 # different distribution nobody has looked at. A week of shadow answers "what
 # does it say about OUR videos" for 0.002 USD and ~2s per video, with no way to
 # damage a clip somebody paid for.
-_MODE = os.environ.get("AUTO_LAYOUT", "0").strip().lower()
+_MODE = os.environ.get("AUTO_LAYOUT", "1").strip().lower()
 SHADOW = _MODE == "shadow"
 ENABLED = _MODE == "1" or SHADOW
 

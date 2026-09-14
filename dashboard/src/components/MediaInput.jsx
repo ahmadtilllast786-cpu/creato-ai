@@ -7,6 +7,14 @@ const SUPPORTED_PLATFORMS = [
     'Facebook', 'Instagram', 'Dailymotion', 'Reddit', 'Streamable',
 ];
 
+const CLIP_TARGET_PRESETS = [
+    { value: '', label: 'Auto' },
+    { value: '3', label: '3' },
+    { value: '5', label: '5' },
+    { value: '10', label: '10' },
+    { value: '15', label: '15' },
+];
+
 export default function MediaInput({ onProcess, isProcessing }) {
     const [youtubeUrlEnabled, setYoutubeUrlEnabled] = useState(true);
     // File upload is the primary path; the link is secondary.
@@ -22,6 +30,9 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [targetClips, setTargetClips] = useState('');
     const [clipMinSeconds, setClipMinSeconds] = useState('');
     const [clipMaxSeconds, setClipMaxSeconds] = useState('');
+    const [scanZoneCount, setScanZoneCount] = useState(() => {
+        try { return localStorage.getItem('os_scan_zone_count') || '3'; } catch { return '3'; }
+    });
     // Auto-hook: burn the AI hook text into every clip. On by default; the
     // choice persists so turning it off sticks across sessions.
     const [autoHook, setAutoHook] = useState(() => {
@@ -82,6 +93,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
             targetClips: targetClips || null,
             clipMinSeconds: clipMinSeconds || null,
             clipMaxSeconds: clipMaxSeconds || null,
+            trackScanZones: scanZoneCount || null,
             autoHook,
             autoHookStyle,
             layout,
@@ -90,6 +102,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
             localStorage.setItem('os_auto_hook', autoHook ? '1' : '0');
             localStorage.setItem('os_auto_hook_style', autoHookStyle);
             localStorage.setItem('os_layout', layout);
+            localStorage.setItem('os_scan_zone_count', scanZoneCount || '3');
         } catch { /* ignore */ }
         if (mode === 'url' && url) {
             onProcess({ type: 'url', payload: url, acknowledged: true, outputFormat, ...advanced });
@@ -253,7 +266,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     >
                         <ChevronDown size={14} className={`transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />
                         advanced options
-                        {(targetClips || clipMinSeconds || clipMaxSeconds || !autoHook) && (
+                        {(targetClips || clipMinSeconds || clipMaxSeconds || scanZoneCount !== '3' || !autoHook) && (
                             <span className="text-brass">·</span>
                         )}
                     </button>
@@ -263,12 +276,31 @@ export default function MediaInput({ onProcess, isProcessing }) {
                         <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-2 animate-fade">
                             <div>
                                 <p className="eyebrow mb-1.5">clips to aim for</p>
+                                <div className="grid grid-cols-5 gap-1.5" role="group" aria-label="clips to aim for">
+                                    {CLIP_TARGET_PRESETS.map((option) => {
+                                        const active = targetClips === option.value;
+                                        return (
+                                            <button
+                                                key={option.label}
+                                                type="button"
+                                                aria-pressed={active}
+                                                onClick={() => setTargetClips(option.value)}
+                                                className={`py-2 rounded-input border text-xs transition-colors ${active
+                                                    ? 'border-[color:var(--color-accent)] text-ink bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)]'
+                                                    : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}`}
+                                            >
+                                                {option.label}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
                                 <input
                                     type="number" min="1" max="15" step="1"
                                     value={targetClips}
                                     onChange={(e) => setTargetClips(e.target.value)}
-                                    placeholder="auto"
-                                    className="input-field"
+                                    placeholder="custom (1–15)"
+                                    aria-label="custom clip count"
+                                    className="input-field mt-1.5"
                                 />
                             </div>
                             <div>
@@ -307,6 +339,22 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                     <option value="split">Two speakers stacked</option>
                                     <option value="screencast">Screen over presenter</option>
                                     <option value="none">Single crop only</option>
+                                </select>
+                            </div>
+                            <div className="col-span-1 sm:col-span-3 flex flex-wrap items-center justify-between gap-3 pt-3 sm:pt-1 border-t border-rule">
+                                <div>
+                                    <span className="text-xs text-ink2">tracking scan bands</span>
+                                    <p className="text-[11px] text-muted mt-0.5">More bands help catch side objects.</p>
+                                </div>
+                                <select
+                                    value={scanZoneCount}
+                                    onChange={(e) => setScanZoneCount(e.target.value)}
+                                    className="input-field !w-auto text-xs py-1.5"
+                                    aria-label="tracking scan bands"
+                                >
+                                    {[3, 4, 5, 6, 7].map((count) => (
+                                        <option key={count} value={String(count)}>{count} bands</option>
+                                    ))}
                                 </select>
                             </div>
                             <div className="col-span-1 sm:col-span-3 flex flex-wrap items-center justify-between gap-3 pt-3 sm:pt-1 border-t border-rule">

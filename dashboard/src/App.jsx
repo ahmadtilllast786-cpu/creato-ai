@@ -863,6 +863,7 @@ function App() {
         target_clips: data.targetClips || null,
         clip_min_seconds: data.clipMinSeconds || null,
         clip_max_seconds: data.clipMaxSeconds || null,
+        track_scan_zones: data.trackScanZones || null,
         // Sent explicitly both ways: absent means off for raw API callers,
         // but the dashboard always states the user's choice.
         auto_hook: data.autoHook ? '1' : '0',

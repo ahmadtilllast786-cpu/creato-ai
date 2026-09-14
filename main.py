@@ -28,6 +28,7 @@ import gemini_worker
 import hook_grounding
 import layout_picker
 import llm_backend
+from tracking import match_box_to_track
 from clip_selection import (build_transcript_windows, clip_count_targets,
                             clip_duration_bounds, get_heuristic_clips,
                             snap_clip_to_words, trim_to_best)
@@ -149,7 +150,7 @@ class SmoothedCameraman:
         # times before the camera follows it; a wrong reading disappears on the
         # next detection and never moves the frame.
         #
-        # The cost is latency on a genuinely fast move: at DETECT_STRIDE=4 and
+        # The cost is latency on a genuinely fast move: at DETECT_STRIDE=2 and
         # 30fps, three confirmations is ~0.4s. That reads as an operator being
         # unhurried, which is the look we want, and it is far cheaper than the
         # whip-panning it replaces.
@@ -339,7 +340,7 @@ class SpeakerTracker:
         
         # ID tracking
         self.next_id = 0
-        self.known_faces = [] # [{'id': 0, 'center': x, 'last_frame': 123}]
+        self.known_faces = [] # [{'id': 0, 'box': [x,y,w,h], 'last_frame': 123}]
 
     def reset(self):
         """Forget every speaker at a scene cut.
@@ -356,43 +357,45 @@ class SpeakerTracker:
         self.last_switch_frame = -1000
         self.known_faces = []
 
-    def get_target(self, face_candidates, frame_number, width):
+    def get_target(self, face_candidates, frame_number, width, height=None):
         """
         Decides which face to focus on.
         face_candidates: list of {'box': [x,y,w,h], 'score': float}
         """
         current_candidates = []
-        
-        # 1. Match faces to known IDs (simple distance tracking)
+
+        # 1. Match faces to known IDs. Use spatial overlap plus x/y and size
+        # continuity, and never assign one old face to two detections in the
+        # same frame. Horizontal-only matching swapped identities whenever two
+        # people crossed or one detector box briefly disappeared.
+        used_ids = set()
+        frame_height = height if height is not None else width
         for face in face_candidates:
-            x, y, w, h = face['box']
-            center_x = x + w / 2
-            
-            best_match_id = -1
-            min_dist = width * 0.15 # Reduced matching radius to avoid jumping in groups
-            
-            # Try to match with known faces seen recently
-            for kf in self.known_faces:
-                if frame_number - kf['last_frame'] > 30: # Forgot faces older than 1s (was 2s)
-                    continue
-                    
-                dist = abs(center_x - kf['center'])
-                if dist < min_dist:
-                    min_dist = dist
-                    best_match_id = kf['id']
-            
-            # If no match, assign new ID
-            if best_match_id == -1:
+            box = face['box']
+            best_match_id = match_box_to_track(
+                box, self.known_faces, frame_number, width, frame_height,
+                used_ids=used_ids, max_age=45,
+            )
+
+            # If no match, assign a new ID. The one-to-one set is updated
+            # immediately so duplicate detector boxes cannot share an ID.
+            if best_match_id is None:
                 best_match_id = self.next_id
                 self.next_id += 1
-            
-            # Update known face
+
+            used_ids.add(best_match_id)
             self.known_faces = [kf for kf in self.known_faces if kf['id'] != best_match_id]
-            self.known_faces.append({'id': best_match_id, 'center': center_x, 'last_frame': frame_number})
-            
+            self.known_faces.append({
+                'id': best_match_id,
+                'box': list(box),
+                'center': box[0] + box[2] / 2.0,
+                'center_y': box[1] + box[3] / 2.0,
+                'last_frame': frame_number,
+            })
+
             current_candidates.append({
                 'id': best_match_id,
-                'box': face['box'],
+                'box': box,
                 'score': face['score']
             })
 
@@ -475,8 +478,10 @@ DETECT_LOCK = threading.Lock()
 # Synchronize initial FFmpeg video cut operations across threads to prevent
 # concurrent file-access sharing violations on Windows (exit status 3199971767 / WinError 32).
 CUT_LOCK = threading.Lock()
-# Detect every Nth frame; SmoothedCameraman interpolates between updates.
-DETECT_STRIDE = max(int(os.environ.get("DETECT_STRIDE", "4")), 1)
+# Detect every Nth frame; SmoothedCameraman interpolates between updates. A
+# two-frame default materially reduces missed faces while keeping the existing
+# DETECT_STRIDE override for CPU-constrained deployments.
+DETECT_STRIDE = max(int(os.environ.get("DETECT_STRIDE", "2")), 1)
 # YOLO fallback (no face found) is far heavier than MediaPipe — extra throttle.
 YOLO_FALLBACK_STRIDE = DETECT_STRIDE * 2
 
@@ -1514,7 +1519,8 @@ def _process_video_to_vertical_v1_legacy(input_video, final_output_video, aspect
                     if frame_number % DETECT_STRIDE == 0 or (is_scene_start and SCENE_CUT_RESET):
                         t_det = time.time()
                         candidates = detect_face_candidates(frame)
-                        target_box = speaker_tracker.get_target(candidates, frame_number, original_width)
+                        target_box = speaker_tracker.get_target(
+                            candidates, frame_number, original_width, original_height)
                         if target_box:
                             cameraman.update_target(target_box)
                         elif frame_number % YOLO_FALLBACK_STRIDE == 0 or (is_scene_start and SCENE_CUT_RESET):
