@@ -14,34 +14,42 @@ const ProcessingAnimation = ({ media, isComplete, syncedTime, isSyncedPlaying, s
     if (!media) return;
 
     if (media.type === 'file') {
-      const url = URL.createObjectURL(media.payload);
-      setIsYouTube(false);
-      setVideoSrc(url);
-      return () => URL.revokeObjectURL(url);
+      try {
+        if (media.payload && (media.payload instanceof Blob || media.payload instanceof File)) {
+          const url = URL.createObjectURL(media.payload);
+          setIsYouTube(false);
+          setVideoSrc(url);
+          return () => URL.revokeObjectURL(url);
+        } else {
+          setIsYouTube(false);
+          setVideoSrc(null);
+        }
+      } catch (err) {
+        console.warn("Failed to create object URL for file:", err);
+        setVideoSrc(null);
+      }
     } else if (media.type === 'server') {
-      // Uploaded source served from the backend (survives a page reload).
-      // The payload is the plain /api/source/<job> path, because that is what
-      // gets persisted; the signed URL is minted here, at render, so a stored
-      // session never carries a token that has since expired. A <video> tag
-      // cannot send the bearer header itself, hence the round trip.
       setIsYouTube(false);
       let cancelled = false;
-      const jobId = media.payload.split('/').pop();
+      const rawPayload = typeof media.payload === 'string' ? media.payload : '';
+      const jobId = rawPayload.split('/').filter(Boolean).pop() || '';
       (async () => {
         try {
+          if (!jobId) {
+            if (!cancelled && rawPayload) setVideoSrc(getApiUrl(rawPayload));
+            return;
+          }
           const res = await apiFetch(`/api/source-url/${jobId}`);
           const { url } = await res.json();
           if (!cancelled && url) setVideoSrc(getApiUrl(url));
         } catch (e) {
-          // Self-host, or a backend without the endpoint: the open path still
-          // works there, and losing the preview is worse than an unsigned URL.
-          if (!cancelled) setVideoSrc(getApiUrl(media.payload));
+          if (!cancelled && rawPayload) setVideoSrc(getApiUrl(rawPayload));
         }
       })();
       return () => { cancelled = true; };
     } else if (media.type === 'url') {
       setIsYouTube(true);
-      const videoId = getYouTubeId(media.payload);
+      const videoId = typeof media.payload === 'string' ? getYouTubeId(media.payload) : null;
       setVideoSrc(videoId);
     }
   }, [media]);
@@ -49,65 +57,82 @@ const ProcessingAnimation = ({ media, isComplete, syncedTime, isSyncedPlaying, s
   // Handle Sync Playback for Local Video
   useEffect(() => {
     if (!isYouTube && videoRef.current) {
-      if (isSyncedPlaying) {
-        // Sync Mode: Seek to time and Play. A non-finite time (a clip with no
-        // start yet) would throw and take the whole tree down — skip the seek.
-        if (Number.isFinite(syncedTime)) videoRef.current.currentTime = syncedTime;
-        videoRef.current.play().catch(e => console.log("Auto-play prevented", e));
-        videoRef.current.loop = false;
-        videoRef.current.muted = true; // Keep muted to avoid double audio with clip
-      } else {
-        // Stop Sync: Pause. Once analysis is complete, resume the ambient loop.
-        videoRef.current.pause();
+      try {
+        if (isSyncedPlaying) {
+          // Sync Mode: Seek to time and Play. A non-finite time (a clip with no
+          // start yet) would throw and take the whole tree down — skip the seek.
+          if (Number.isFinite(syncedTime)) videoRef.current.currentTime = Math.max(0, syncedTime);
+          videoRef.current.play().catch(e => console.log("Auto-play prevented", e));
+          videoRef.current.loop = false;
+          videoRef.current.muted = true; // Keep muted to avoid double audio with clip
+        } else {
+          // Stop Sync: Pause. Once analysis is complete, resume the ambient loop.
+          videoRef.current.pause();
 
-        if (isComplete) {
-             videoRef.current.loop = true;
-             videoRef.current.play().catch(e => console.log("Ambient play prevented", e));
+          if (isComplete) {
+               videoRef.current.loop = true;
+               videoRef.current.play().catch(e => console.log("Ambient play prevented", e));
+          }
         }
+      } catch (err) {
+        console.warn("Sync playback error:", err);
       }
     }
   }, [syncedTime, isSyncedPlaying, isYouTube, isComplete, syncTrigger]);
 
   // Handle Sync Playback for YouTube (Basic Iframe Control via PostMessage)
   useEffect(() => {
-    if (isYouTube && iframeRef.current && videoSrc) {
-        const iframeWindow = iframeRef.current.contentWindow;
-        if (isSyncedPlaying) {
-             // Seek and Play
-             iframeWindow.postMessage(JSON.stringify({ event: 'command', func: 'seekTo', args: [syncedTime, true] }), '*');
-             iframeWindow.postMessage(JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*');
-        } else {
-             // Pause
-             iframeWindow.postMessage(JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }), '*');
-        }
+    try {
+      if (isYouTube && iframeRef.current && videoSrc) {
+          const iframeWindow = iframeRef.current.contentWindow;
+          if (iframeWindow) {
+            if (isSyncedPlaying) {
+                 // Seek and Play
+                 iframeWindow.postMessage(JSON.stringify({ event: 'command', func: 'seekTo', args: [syncedTime, true] }), '*');
+                 iframeWindow.postMessage(JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*');
+            } else {
+                 // Pause
+                 iframeWindow.postMessage(JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }), '*');
+            }
+          }
+      }
+    } catch (err) {
+      console.warn("YouTube sync error:", err);
     }
   }, [syncedTime, isSyncedPlaying, isYouTube, videoSrc, syncTrigger]);
 
 
   const getYouTubeId = (url) => {
+    if (!url || typeof url !== 'string') return null;
     const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
     const match = url.match(regExp);
-    return (match && match[2].length === 11) ? match[2] : null;
+    return (match && match[2] && match[2].length === 11) ? match[2] : null;
   };
 
   const togglePlayPause = (e) => {
     if (e) e.stopPropagation();
-    if (!isYouTube && videoRef.current) {
-      if (videoRef.current.paused) {
-        videoRef.current.play().then(() => setIsPlaying(true)).catch(err => console.log("Play failed", err));
-      } else {
-        videoRef.current.pause();
-        setIsPlaying(false);
+    try {
+      if (!isYouTube && videoRef.current) {
+        if (videoRef.current.paused) {
+          videoRef.current.play().then(() => setIsPlaying(true)).catch(err => console.log("Play failed", err));
+        } else {
+          videoRef.current.pause();
+          setIsPlaying(false);
+        }
+      } else if (isYouTube && iframeRef.current && videoSrc) {
+        const iframeWindow = iframeRef.current.contentWindow;
+        if (iframeWindow) {
+          if (isPlaying) {
+            iframeWindow.postMessage(JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }), '*');
+            setIsPlaying(false);
+          } else {
+            iframeWindow.postMessage(JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*');
+            setIsPlaying(true);
+          }
+        }
       }
-    } else if (isYouTube && iframeRef.current && videoSrc) {
-      const iframeWindow = iframeRef.current.contentWindow;
-      if (isPlaying) {
-        iframeWindow.postMessage(JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }), '*');
-        setIsPlaying(false);
-      } else {
-        iframeWindow.postMessage(JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*');
-        setIsPlaying(true);
-      }
+    } catch (err) {
+      console.warn("Toggle play/pause error:", err);
     }
   };
 
@@ -144,6 +169,10 @@ const ProcessingAnimation = ({ media, isComplete, syncedTime, isSyncedPlaying, s
             muted
             loop
             playsInline
+            onError={(e) => {
+              console.warn("Processing preview video failed to load, falling back to spinner:", e);
+              setVideoSrc(null);
+            }}
             onPlay={() => setIsPlaying(true)}
             onPause={() => setIsPlaying(false)}
             onClick={togglePlayPause}

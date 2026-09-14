@@ -22,13 +22,14 @@ const PLATFORM_OPTIONS = [
 ];
 
 function clipDurationSeconds(clip) {
+    if (!clip || typeof clip !== 'object') return NaN;
     // A recut clip's start/end are the covering source range (segments may be
     // non-contiguous or reordered); its real duration is the segment sum.
     const segments = clip.recipe?.segments;
-    if (segments?.length) {
-        return segments.reduce((acc, s) => acc + (s.end - s.start), 0);
+    if (Array.isArray(segments) && segments.length) {
+        return segments.reduce((acc, s) => acc + ((s && Number.isFinite(s.end) && Number.isFinite(s.start)) ? (s.end - s.start) : 0), 0);
     }
-    return clip.end && clip.start ? clip.end - clip.start : NaN;
+    return (Number.isFinite(clip.end) && Number.isFinite(clip.start)) ? (clip.end - clip.start) : NaN;
 }
 
 function formatDuration(clip) {
@@ -48,13 +49,14 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     // clip.video_url mutates after server edits. Used as the compositing base
     // for the Remotion preview so it never stacks subtitles over an already-
     // subtitled file (double-subtitle bug).
+    const rawVideoUrl = typeof clip?.video_url === 'string' ? clip.video_url : '';
     const stripBurns = (filename) => {
         let f = filename || '', prev;
         do { prev = f; f = f.replace(/^subtitled_\d+_/, '').replace(/^hooked_\d+_/, '').replace(/^hook_/, ''); } while (f !== prev);
         return f;
     };
-    const originalVideoUrl = getApiUrl((clip.video_url || '').replace(/[^/]+$/, stripBurns((clip.video_url || '').split('/').pop())));
-    const [currentVideoUrl, setCurrentVideoUrl] = useState(getApiUrl(clip.video_url));
+    const originalVideoUrl = rawVideoUrl ? getApiUrl(rawVideoUrl.replace(/[^/]+$/, stripBurns(rawVideoUrl.split('/').pop()))) : '';
+    const [currentVideoUrl, setCurrentVideoUrl] = useState(() => getApiUrl(rawVideoUrl));
     // Where the <video> element pulls its bytes from. The clips are archived to
     // R2 anyway, and R2 egress is free and edge-served, while /videos is served
     // by the same single-worker API process that is running the renders. So play
@@ -157,7 +159,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     // All server-side operations must chain from this, so burned-in edits
     // (subtitles, hooks, effects) never get silently dropped.
     // A reopened project seeds it from the persisted project state.
-    const [serverVideoFile, setServerVideoFile] = useState(initialState?.server_file || (clip.video_url || '').split('/').pop());
+    const [serverVideoFile, setServerVideoFile] = useState(initialState?.server_file || (rawVideoUrl.split('/').pop() || ''));
     const [videoErrored, setVideoErrored] = useState(false);
     const [resolution, setResolution] = useState(null);
 
@@ -188,8 +190,9 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     // subtitles applied from another card), adopt it so the card shows the
     // freshly subtitled video instead of a stale one.
     useEffect(() => {
-        const serverUrl = getApiUrl(clip.video_url);
-        const serverName = (clip.video_url || '').split('/').pop();
+        const vUrl = typeof clip?.video_url === 'string' ? clip.video_url : '';
+        const serverUrl = getApiUrl(vUrl);
+        const serverName = vUrl.split('/').pop() || '';
         if (serverName && serverName !== serverVideoFile) {
             setServerVideoFile(serverName);
             setCurrentVideoUrl(serverUrl);
@@ -198,7 +201,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             if (videoRef.current) videoRef.current.load();
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [clip.video_url]);
+    }, [clip?.video_url]);
 
     const [platforms, setPlatforms] = useState({
         tiktok: true,
@@ -813,7 +816,8 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                         if (videoRef.current) videoRef.current.muted = false;
                         ActivePlaybackController.claimPlayback(playerId, { element: videoRef.current });
                         const currentTime = videoRef.current ? videoRef.current.currentTime : 0;
-                        onPlay && onPlay(clip.start + currentTime);
+                        const startTime = Number.isFinite(clip?.start) ? clip.start : 0;
+                        onPlay && onPlay(startTime + currentTime);
                     }}
                     onPause={() => onPause && onPause()}
                     onEnded={() => {

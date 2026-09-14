@@ -1231,11 +1231,16 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                 </div>
                 {logsExpanded && (
                   <div className="p-4 max-h-64 overflow-y-auto font-mono text-xs space-y-1 custom-scrollbar">
-                    {genLogs.map((log, i) => (
-                      <div key={i} className={`${log.toLowerCase().includes('error') ? 'text-danger' : log.includes('✅') ? 'text-ok' : 'text-muted'}`}>
-                        {log}
-                      </div>
-                    ))}
+                    {genLogs.map((log, i) => {
+                      const logStr = typeof log === 'string' ? log : (log ? JSON.stringify(log) : '');
+                      const isErr = logStr.toLowerCase().includes('error');
+                      const isOk = logStr.includes('✅');
+                      return (
+                        <div key={i} className={`${isErr ? 'text-danger' : isOk ? 'text-ok' : 'text-muted'}`}>
+                          {logStr}
+                        </div>
+                      );
+                    })}
                     {genStatus === 'processing' && (
                       <div className="animate-pulse text-brass">_</div>
                     )}

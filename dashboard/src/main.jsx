@@ -10,6 +10,7 @@ import PricingPage from './components/PricingPage'
 import AccountPage from './components/AccountPage'
 import LoginModal from './components/LoginModal'
 import OAuthConsent from './components/OAuthConsent'
+import ErrorBoundary from './components/ui/ErrorBoundary'
 
 function PageShell({ title, children }) {
   return (
@@ -108,14 +109,17 @@ function Root() {
   return <Landing onLaunchApp={handleLaunchApp} />;
 }
 
+
 // Before React mounts: AuthContext rewrites the URL on auth redirects, which
 // would destroy the referrer and any UTM params we still need to read.
 captureAttribution();
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <AuthProvider>
-      <Root />
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <Root />
+      </AuthProvider>
+    </ErrorBoundary>
   </StrictMode>,
 )

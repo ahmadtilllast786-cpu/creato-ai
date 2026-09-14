@@ -24,6 +24,7 @@ import AdvancedBanner from './components/AdvancedBanner';
 import HistoryTab from './components/HistoryTab';
 import ProfileMenu from './components/ProfileMenu';
 import Modal from './components/ui/Modal';
+import ErrorBoundary from './components/ui/ErrorBoundary';
 import { useAuth } from './contexts/AuthContext';
 import { apiFetch, apiJson, QuotaError } from './lib/api';
 import { track } from './lib/analytics';
@@ -257,6 +258,7 @@ function App() {
     const clips = results?.clips;
     if (!Array.isArray(clips)) return [];
     return clips
+      .filter((clip) => clip && typeof clip === 'object')
       .map((clip, index) => ({ clip, index }))
       .sort((a, b) => {
         const sa = Number.isFinite(a.clip?.predicted_score) ? a.clip.predicted_score : -1;
@@ -1762,7 +1764,8 @@ function App() {
 
           {/* View: Processing / Results (Split View) */}
           {activeTab === 'dashboard' && (status === 'processing' || status === 'complete' || status === 'error') && (
-            <div className="h-full flex flex-col md:flex-row gap-3 md:gap-4 p-3 md:p-4 overflow-y-auto md:overflow-y-hidden custom-scrollbar animate-fade">
+            <ErrorBoundary fallbackTitle="Playback & Results View Interrupted">
+              <div className="h-full flex flex-col md:flex-row gap-3 md:gap-4 p-3 md:p-4 overflow-y-auto md:overflow-y-hidden custom-scrollbar animate-fade">
 
               {/* Left Panel: Preview & Status */}
               <div className={`${status === 'complete' ? 'w-full md:w-[30%] lg:w-[25%]' : 'w-full md:w-[55%] lg:w-[60%]'} md:h-full flex flex-col shrink-0 md:shrink card p-3.5 sm:p-6 md:overflow-y-auto custom-scrollbar transition-all duration-700 ease-in-out`}>
@@ -1798,7 +1801,7 @@ function App() {
                   <div className="sm:hidden mb-3 flex items-start gap-2 text-xs text-ink2 min-w-0">
                     <Loader2 size={14} className="animate-spin text-brass shrink-0 mt-px" />
                     <span className="min-w-0 leading-snug break-words">
-                      {logs.length ? logs[logs.length - 1] : 'starting up…'}
+                      {logs.length ? (typeof logs[logs.length - 1] === 'string' ? logs[logs.length - 1] : JSON.stringify(logs[logs.length - 1])) : 'starting up…'}
                     </span>
                   </div>
                 )}
@@ -1831,12 +1834,16 @@ function App() {
                   </button>
                   {logsVisible && (
                     <div className="flex-1 p-3.5 sm:p-4 overflow-y-auto font-mono text-[11px] sm:text-xs space-y-1.5 custom-scrollbar text-muted break-words">
-                      {logs.map((log, i) => (
-                        <div key={i} className={`flex gap-2 ${log.toLowerCase().includes('error') ? 'text-danger' : 'text-muted'}`}>
-                          <span className="text-muted opacity-50 shrink-0 hidden sm:inline">{new Date().toLocaleTimeString()}</span>
-                          <span className="min-w-0 break-words">{log}</span>
-                        </div>
-                      ))}
+                      {logs.map((log, i) => {
+                        const logText = typeof log === 'string' ? log : (log ? JSON.stringify(log) : '');
+                        const isErr = logText.toLowerCase().includes('error');
+                        return (
+                          <div key={i} className={`flex gap-2 ${isErr ? 'text-danger' : 'text-muted'}`}>
+                            <span className="text-muted opacity-50 shrink-0 hidden sm:inline">{new Date().toLocaleTimeString()}</span>
+                            <span className="min-w-0 break-words">{logText}</span>
+                          </div>
+                        );
+                      })}
                       {status === 'processing' && (
                         <div className="animate-pulse text-brass">_</div>
                       )}
@@ -1859,8 +1866,8 @@ function App() {
                       </span>
                     )}
                     {results?.cost_analysis && !isManaged && (
-                      <span className="readout bg-paper3 px-2.5 py-1 rounded-full" title={`Input: ${results.cost_analysis.input_tokens} | Output: ${results.cost_analysis.output_tokens}`}>
-                        GEMINI · ${results.cost_analysis.total_cost.toFixed(5)}
+                      <span className="readout bg-paper3 px-2.5 py-1 rounded-full" title={`Input: ${results.cost_analysis.input_tokens || 0} | Output: ${results.cost_analysis.output_tokens || 0}`}>
+                        GEMINI · ${Number(results.cost_analysis.total_cost || 0).toFixed(5)}
                       </span>
                     )}
                   </h2>
@@ -2010,7 +2017,8 @@ function App() {
               </div>
 
             </div>
-          )}
+          </ErrorBoundary>
+        )}
 
         </div>
 
