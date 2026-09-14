@@ -20,10 +20,11 @@ const SIZE_SCALE: Record<string, number> = {
   L: 1.3,
 };
 
-// Percentages must match hooks.py's overlay_y math (top 20% / bottom 70%),
-// or the preview drifts from what the server path renders.
+// Permanent Viral Hook Positioning: Anchor the initial hook headline permanently
+// in the dedicated safe margin above the 9:16 frame (Y: ~2%), so it never overlays
+// speaker faces, eyes, or lower subtitles.
 const POSITION_STYLE: Record<string, React.CSSProperties> = {
-  top: { top: "20%", bottom: "auto" },
+  top: { top: "2%", bottom: "auto" },
   center: { top: "50%", bottom: "auto", transform: "translateY(-50%)" },
   bottom: { top: "70%", bottom: "auto" },
 };

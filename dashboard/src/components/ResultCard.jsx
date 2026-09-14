@@ -11,6 +11,7 @@ import WatermarkModal, { watermarkNoticeDismissed } from './WatermarkModal';
 import TikTokDraftNotice from './TikTokDraftNotice';
 import { useAuth } from '../contexts/AuthContext';
 import { renderInBrowser } from '../lib/renderInBrowser';
+import { ActivePlaybackController } from '../lib/activePlayback';
 
 const QUIET_BTN = 'group flex flex-col items-center justify-center gap-1 py-2.5 sm:py-2 px-1 rounded-input border border-rule hover:bg-paper3 text-[11px] lowercase text-ink2 whitespace-nowrap transition-colors disabled:opacity-45 disabled:cursor-not-allowed';
 
@@ -76,6 +77,36 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     // the chase in App.jsx can land while they are watching the result, and losing
     // their position to save a few seconds of buffering is a bad trade.
     const [hasPlayed, setHasPlayed] = useState(false);
+    const playerId = React.useMemo(() => `result-card-${index}-${jobId || 'clip'}`, [index, jobId]);
+
+    useEffect(() => {
+        const unregister = ActivePlaybackController.register(playerId, {
+            element: videoRef.current,
+            pause: () => {
+                try {
+                    if (videoRef.current && !videoRef.current.paused) {
+                        videoRef.current.pause();
+                        videoRef.current.muted = true;
+                    }
+                } catch (e) {}
+            },
+        });
+
+        const handleStopMedia = (e) => {
+            if (e.detail?.activeId !== playerId && videoRef.current && !videoRef.current.paused) {
+                try {
+                    videoRef.current.pause();
+                    videoRef.current.muted = true;
+                } catch (e) {}
+            }
+        };
+
+        window.addEventListener('STOP_ALL_MEDIA', handleStopMedia);
+        return () => {
+            unregister();
+            window.removeEventListener('STOP_ALL_MEDIA', handleStopMedia);
+        };
+    }, [playerId]);
 
     // A delivered clip is tens of MB, and on a slow link the old silent
     // fetch-then-save took minutes with nothing on screen, which reads as a dead
@@ -776,8 +807,11 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                         if (durable?.url && currentVideoUrl !== durable.url) setCurrentVideoUrl(durable.url);
                         else setVideoErrored(true);
                     }}
+                    data-player-id={playerId}
                     onPlay={() => {
                         setHasPlayed(true);
+                        if (videoRef.current) videoRef.current.muted = false;
+                        ActivePlaybackController.claimPlayback(playerId, { element: videoRef.current });
                         const currentTime = videoRef.current ? videoRef.current.currentTime : 0;
                         onPlay && onPlay(clip.start + currentTime);
                     }}
@@ -785,6 +819,8 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     onEnded={() => {
                         if (videoRef.current) {
                             videoRef.current.currentTime = 0;
+                            videoRef.current.muted = false;
+                            ActivePlaybackController.claimPlayback(playerId, { element: videoRef.current });
                             videoRef.current.play();
                         }
                     }}

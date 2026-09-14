@@ -3,6 +3,8 @@ import { Loader2 } from 'lucide-react';
 import RemotionPreview from './RemotionPreview';
 import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
+import { ActivePlaybackController } from '../lib/activePlayback';
+import InspectorActionBar from './ui/InspectorActionBar';
 
 const ENTRANCE_OPTIONS = [
     { value: 'spring', label: 'Bounce' },
@@ -49,6 +51,44 @@ export default function HookModal({ isOpen, onClose, onGenerate, onRemove, isPro
     const [entranceAnimation, setEntranceAnimation] = useState(prefs.entranceAnimation || 'spring');
     const [displayDuration, setDisplayDuration] = useState(5);
 
+    // Snapshot of applied settings for clean cancel/restore
+    const appliedSnapshotRef = React.useRef(null);
+
+    React.useEffect(() => {
+        if (isOpen) {
+            ActivePlaybackController.stopAll();
+            appliedSnapshotRef.current = {
+                text, position, size, style, entranceAnimation, displayDuration,
+            };
+        }
+    }, [isOpen]);
+
+    const handleCancel = () => {
+        if (appliedSnapshotRef.current) {
+            const s = appliedSnapshotRef.current;
+            setText(s.text);
+            setPosition(s.position);
+            setSize(s.size);
+            setStyle(s.style);
+            setEntranceAnimation(s.entranceAnimation);
+            setDisplayDuration(s.displayDuration);
+        }
+        onClose();
+    };
+
+    const isDirty = React.useMemo(() => {
+        if (!appliedSnapshotRef.current) return false;
+        const s = appliedSnapshotRef.current;
+        return (
+            text !== s.text ||
+            position !== s.position ||
+            size !== s.size ||
+            style !== s.style ||
+            entranceAnimation !== s.entranceAnimation ||
+            displayDuration !== s.displayDuration
+        );
+    }, [text, position, size, style, entranceAnimation, displayDuration]);
+
     if (!isOpen) return null;
 
     // Build hook config for Remotion preview
@@ -68,7 +108,7 @@ export default function HookModal({ isOpen, onClose, onGenerate, onRemove, isPro
         switch (position) {
             case 'center': return 'items-center justify-center';
             case 'bottom': return 'items-center justify-end pb-[20%]';
-            case 'top': default: return 'items-center justify-start pt-[20%]';
+            case 'top': default: return 'items-center justify-start pt-[3%]';
         }
     };
 
@@ -248,30 +288,26 @@ export default function HookModal({ isOpen, onClose, onGenerate, onRemove, isPro
                         </div>
                     </div>
 
-                    <div className="flex gap-2 mt-5 shrink-0">
-                        <button onClick={onClose} className="btn-ghost">
-                            cancel
-                        </button>
-                        <button
-                            onClick={() => {
-                                try {
-                                    localStorage.setItem('os_hook_prefs', JSON.stringify({
-                                        style, position, size, entranceAnimation,
-                                    }));
-                                } catch { /* ignore */ }
-                                onGenerate({
-                                    text, position, size, style,
-                                    // Remotion data
-                                    remotion: hookConfig,
-                                });
-                            }}
-                            disabled={isProcessing || !text.trim()}
-                            className="btn-primary flex-1"
-                        >
-                            {isProcessing && <Loader2 size={16} className="animate-spin text-brassink" />}
-                            {isProcessing ? 'generating...' : 'add hook'}
-                        </button>
-                    </div>
+                    <InspectorActionBar
+                        isDirty={isDirty}
+                        isApplying={isProcessing}
+                        applyLabel={isProcessing ? 'generating…' : 'add hook'}
+                        cancelLabel="cancel"
+                        onApply={() => {
+                            try {
+                                localStorage.setItem('os_hook_prefs', JSON.stringify({
+                                    style, position, size, entranceAnimation,
+                                }));
+                            } catch { /* ignore */ }
+                            onGenerate({
+                                text, position, size, style,
+                                // Remotion data
+                                remotion: hookConfig,
+                            });
+                        }}
+                        onCancel={handleCancel}
+                        description={isDirty ? 'staged hook headline' : 'hook applied'}
+                    />
                 </div>
             </div>
         </Modal>

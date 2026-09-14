@@ -5,6 +5,8 @@ import { detectBurnedInCaptions } from '../lib/captionDetector';
 import RemotionPreview from './RemotionPreview';
 import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
+import { ActivePlaybackController } from '../lib/activePlayback';
+import InspectorActionBar from './ui/InspectorActionBar';
 
 const COLLISION_OPTIONS = [
     { value: 'smart_reposition', label: 'smart safe' },
@@ -113,6 +115,63 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
         // Keep the Remotion preview roughly in sync with the burned look
         setAnimation(p.style === 'karaoke' ? (p.effect === 'pop' ? 'pop' : p.effect === 'glow' ? 'word-highlight' : 'karaoke') : 'none');
     };
+
+    // Snapshot of applied settings for clean cancel/restore
+    const appliedSnapshotRef = React.useRef(null);
+
+    useEffect(() => {
+        if (isOpen) {
+            ActivePlaybackController.stopAll();
+            appliedSnapshotRef.current = {
+                position, fontSize, fontName, fontColor, highlightColor,
+                borderColor, borderWidth, bgColor, bgOpacity, animation,
+                style, effect, baseOpacity, uppercase, activePreset,
+                collisionMode, manualYOffset,
+            };
+        }
+    }, [isOpen]);
+
+    const handleCancel = () => {
+        if (appliedSnapshotRef.current) {
+            const s = appliedSnapshotRef.current;
+            setPosition(s.position);
+            setFontName(s.fontName);
+            setFontColor(s.fontColor);
+            setHighlightColor(s.highlightColor);
+            setBorderColor(s.borderColor);
+            setBorderWidth(s.borderWidth);
+            setBgColor(s.bgColor);
+            setBgOpacity(s.bgOpacity);
+            setAnimation(s.animation);
+            setStyle(s.style);
+            setEffect(s.effect);
+            setBaseOpacity(s.baseOpacity);
+            setUppercase(s.uppercase);
+            setActivePreset(s.activePreset);
+            setCollisionMode(s.collisionMode);
+            setManualYOffset(s.manualYOffset);
+        }
+        onClose();
+    };
+
+    const isDirty = useMemo(() => {
+        if (!appliedSnapshotRef.current) return false;
+        const s = appliedSnapshotRef.current;
+        return (
+            position !== s.position ||
+            fontName !== s.fontName ||
+            fontColor !== s.fontColor ||
+            highlightColor !== s.highlightColor ||
+            borderWidth !== s.borderWidth ||
+            bgOpacity !== s.bgOpacity ||
+            style !== s.style ||
+            effect !== s.effect ||
+            uppercase !== s.uppercase ||
+            activePreset !== s.activePreset ||
+            collisionMode !== s.collisionMode ||
+            manualYOffset !== s.manualYOffset
+        );
+    }, [position, fontName, fontColor, highlightColor, borderWidth, bgOpacity, style, effect, uppercase, activePreset, collisionMode, manualYOffset]);
 
     // Remotion preview state
     const [captions, setCaptions] = useState([]);
@@ -271,14 +330,14 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
         if (collisionMode === 'smart_reposition') {
             fallbackPositionClasses = 'top-0 bottom-0';
         } else if (collisionMode === 'occlusion_mask') {
-            fallbackPositionClasses = 'bottom-20';
+            fallbackPositionClasses = 'bottom-[18%]';
         } else if (collisionMode === 'manual_offset') {
             fallbackPositionInline = { top: `${manualYOffset}%`, transform: 'translateY(-50%)' };
         }
     } else {
         if (position === 'top') fallbackPositionClasses = 'top-20';
         else if (position === 'middle') fallbackPositionClasses = 'top-0 bottom-0';
-        else fallbackPositionClasses = 'bottom-20';
+        else fallbackPositionClasses = 'bottom-[18%]';
     }
 
     return (
@@ -605,19 +664,15 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                             const bulkRunning = bulkProgress?.running;
                             return (
                                 <>
-                                    <div className="flex gap-2">
-                                        <button onClick={onClose} className="btn-ghost">
-                                            cancel
-                                        </button>
-                                        <button
-                                            onClick={() => onGenerate(styleOptions)}
-                                            disabled={isProcessing}
-                                            className="btn-primary flex-1"
-                                        >
-                                            {(isProcessing && !bulkRunning) && <Loader2 size={16} className="animate-spin text-brassink" />}
-                                            {(isProcessing && !bulkRunning) ? 'generating...' : 'apply to this clip'}
-                                        </button>
-                                    </div>
+                                    <InspectorActionBar
+                                        isDirty={isDirty || textEdited}
+                                        isApplying={isProcessing && !bulkRunning}
+                                        applyLabel={isProcessing && !bulkRunning ? 'applying…' : 'apply to this clip'}
+                                        cancelLabel="cancel"
+                                        onApply={() => onGenerate(styleOptions)}
+                                        onCancel={handleCancel}
+                                        description={isDirty || textEdited ? 'staged caption styling' : 'captions applied'}
+                                    />
                                     {onApplyAll && bulkCount > 1 && (
                                         <button
                                             onClick={() => onApplyAll({ ...styleOptions, captions: null })}

@@ -2,11 +2,13 @@ import React, { useState, useEffect, useReducer, useRef, useCallback, useMemo, u
 import {
     X, Loader2, Plus, Trash2, ChevronUp, ChevronDown, Scissors,
     AlertCircle, Undo2, Redo2, ChevronsRight, ChevronsLeft,
-    PanelLeft, PanelLeftClose, Film,
+    PanelLeft, PanelLeftClose, Film, Type, Sparkles, Sliders, Volume2,
 } from 'lucide-react';
 import { getApiUrl } from '../config';
 import { apiFetch, apiJson, QuotaError } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
+import { ActivePlaybackController } from '../lib/activePlayback';
+import InspectorActionBar from './ui/InspectorActionBar';
 
 // Full-screen clip editor: shows WHICH source segments a clip was cut from,
 // lets the user trim/extend/split/reorder them (word-snapped), and re-renders
@@ -135,9 +137,123 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
     const [ghost, setGhost] = useState(null); // in-progress new segment on the source track
     const transcriptRef = useRef(null);
 
+    // Active playback player IDs
+    const programPlayerId = useMemo(() => `clip-editor-program-${clipIndex}`, [clipIndex]);
+    const sourcePlayerId = useMemo(() => `clip-editor-source-${clipIndex}`, [clipIndex]);
+
+    // Active tool inspector tab: 'cuts' | 'captions' | 'effects' | 'audio'
+    const [activeInspectorTab, setActiveInspectorTab] = useState('cuts');
+
+    // ─── Transactional Feature Inspectors State Buffers ─────────────
+    // 1. Captions Inspector Staging Buffer
+    const initialCaptions = useMemo(() => ({
+        style: 'karaoke',
+        fontName: 'Verdana',
+        fontSize: 48,
+        highlightColor: '#FFD700',
+        fontColor: '#FFFFFF',
+        borderColor: '#000000',
+        borderWidth: 2,
+        position: 'bottom', // Safe margin bottom
+        uppercase: false,
+        animation: 'pop',
+    }), []);
+    const [appliedCaptions, setAppliedCaptions] = useState(initialCaptions);
+    const [draftCaptions, setDraftCaptions] = useState(initialCaptions);
+
+    // 2. Effects & Filters Inspector Staging Buffer
+    const initialEffects = useMemo(() => ({
+        brightness: 1.0,
+        contrast: 1.05,
+        saturation: 1.06,
+        vignette: true,
+        vignetteAngle: 0.35,
+        punchInZoom: true,
+        maxZoom: 1.15,
+    }), []);
+    const [appliedEffects, setAppliedEffects] = useState(initialEffects);
+    const [draftEffects, setDraftEffects] = useState(initialEffects);
+
+    // 3. Audio Enhancements Staging Buffer
+    const initialAudio = useMemo(() => ({
+        silenceThresholdSec: 0.35,
+        breathMarginSec: 0.06,
+        fillerWordCutting: true,
+        audioDenoise: true,
+        transitionSfx: true,
+        sfxVolume: 0.22,
+    }), []);
+    const [appliedAudio, setAppliedAudio] = useState(initialAudio);
+    const [draftAudio, setDraftAudio] = useState(initialAudio);
+
+    const isCaptionsDirty = useMemo(
+        () => JSON.stringify(draftCaptions) !== JSON.stringify(appliedCaptions),
+        [draftCaptions, appliedCaptions]
+    );
+    const isEffectsDirty = useMemo(
+        () => JSON.stringify(draftEffects) !== JSON.stringify(appliedEffects),
+        [draftEffects, appliedEffects]
+    );
+    const isAudioDirty = useMemo(
+        () => JSON.stringify(draftAudio) !== JSON.stringify(appliedAudio),
+        [draftAudio, appliedAudio]
+    );
+
     useEffect(() => {
         try { localStorage.setItem(HIDE_SOURCE_KEY, showSource ? '0' : '1'); } catch { /* private mode */ }
     }, [showSource]);
+
+    // Enforce mutual exclusion: stop all background media when editor mounts
+    useEffect(() => {
+        ActivePlaybackController.stopAll();
+
+        const unregProgram = ActivePlaybackController.register(programPlayerId, {
+            element: videoRef.current,
+            pause: () => {
+                try {
+                    if (videoRef.current && !videoRef.current.paused) {
+                        videoRef.current.pause();
+                        videoRef.current.muted = true;
+                    }
+                } catch (e) {}
+            },
+        });
+
+        const unregSource = ActivePlaybackController.register(sourcePlayerId, {
+            element: sourceRef.current,
+            pause: () => {
+                try {
+                    if (sourceRef.current && !sourceRef.current.paused) {
+                        sourceRef.current.pause();
+                        sourceRef.current.muted = true;
+                    }
+                } catch (e) {}
+            },
+        });
+
+        const handleStopMedia = (e) => {
+            const active = e.detail?.activeId;
+            if (active !== programPlayerId && videoRef.current && !videoRef.current.paused) {
+                try {
+                    videoRef.current.pause();
+                    videoRef.current.muted = true;
+                } catch (e) {}
+            }
+            if (active !== sourcePlayerId && sourceRef.current && !sourceRef.current.paused) {
+                try {
+                    sourceRef.current.pause();
+                    sourceRef.current.muted = true;
+                } catch (e) {}
+            }
+        };
+
+        window.addEventListener('STOP_ALL_MEDIA', handleStopMedia);
+        return () => {
+            unregProgram();
+            unregSource();
+            window.removeEventListener('STOP_ALL_MEDIA', handleStopMedia);
+        };
+    }, [programPlayerId, sourcePlayerId]);
 
     // ---- scrubbing the source monitor ---------------------------------------
     // Dragging on the source track drives this <video>, so the cut is chosen
@@ -691,8 +807,13 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
             const sp = coverage[playSpanRef.current];
             if (sp && sp.rendered === null) { e.target.pause(); return; }
         }
+        if (sourceRef.current && !sourceRef.current.paused) {
+            sourceRef.current.pause();
+            sourceRef.current.muted = true;
+        }
+        ActivePlaybackController.claimPlayback(programPlayerId, { element: e.target });
         startPlayLoop();
-    }, [coverage, dirty, startPlayLoop]);
+    }, [coverage, dirty, startPlayLoop, programPlayerId]);
 
     const onScrubMove = useCallback((e) => {
         const d = dragRef.current;
@@ -1162,8 +1283,17 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                                 controls
                                 playsInline
                                 preload="metadata"
+                                data-player-id={sourcePlayerId}
                                 onLoadedMetadata={applySeek}
                                 onTimeUpdate={(e) => setSourceTime(e.target.currentTime)}
+                                onPlay={(e) => {
+                                    if (videoRef.current && !videoRef.current.paused) {
+                                        videoRef.current.pause();
+                                        videoRef.current.muted = true;
+                                        stopPlayLoop();
+                                    }
+                                    ActivePlaybackController.claimPlayback(sourcePlayerId, { element: e.target });
+                                }}
                                 className="h-full w-auto max-w-full max-h-full bg-black rounded-card border border-rule"
                             />
                         </div>
@@ -1308,18 +1438,44 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                         )}
                     </div>
                     <div className="flex-1 min-h-0 flex items-center justify-center">
-                        <div className="h-full max-h-full aspect-[9/16] bg-black rounded-card border border-rule overflow-hidden">
+                        <div className="h-full max-h-full aspect-[9/16] bg-black rounded-card border border-rule overflow-hidden relative">
                             <video
                                 ref={videoRef}
                                 src={previewUrl}
                                 controls
                                 playsInline
+                                data-player-id={programPlayerId}
+                                style={{
+                                    filter: `brightness(${draftEffects.brightness}) contrast(${draftEffects.contrast}) saturate(${draftEffects.saturation})`,
+                                }}
                                 className="w-full h-full object-contain"
                                 onTimeUpdate={onClipTimeUpdate}
                                 onSeeked={onClipSeeked}
                                 onPlay={onClipPlay}
                                 onPause={stopPlayLoop}
                             />
+                            {/* Real-time Staged Captions Preview Overlay in Bottom Safe Margin Zone (Y: ~75%-85%) */}
+                            {activeInspectorTab === 'captions' && (
+                                <div className="absolute inset-x-0 bottom-[18%] px-6 text-center pointer-events-none flex flex-col items-center justify-center animate-fade">
+                                    <span
+                                        style={{
+                                            fontFamily: draftCaptions.fontName || 'Verdana',
+                                            fontSize: `${Math.round(draftCaptions.fontSize * 0.38)}px`,
+                                            color: draftCaptions.fontColor || '#FFFFFF',
+                                            backgroundColor: 'rgba(0, 0, 0, 0.65)',
+                                            padding: '4px 12px',
+                                            borderRadius: '8px',
+                                            fontWeight: 700,
+                                            textTransform: draftCaptions.uppercase ? 'uppercase' : 'none',
+                                            WebkitTextStroke: `${draftCaptions.borderWidth || 2}px ${draftCaptions.borderColor || '#000000'}`,
+                                            paintOrder: 'stroke fill',
+                                            boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+                                        }}
+                                    >
+                                        Live Staged <span style={{ color: draftCaptions.highlightColor || '#FFD700' }}>Captions</span> Preview
+                                    </span>
+                                </div>
+                            )}
                         </div>
                     </div>
 
@@ -1395,144 +1551,467 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                     {!sourceAvailable && sourceTrack}
                 </div>
 
-                {/* ---- column 3 · controls ---- */}
+                {/* ---- column 3 · controls & tool panels ---- */}
                 <div className="w-full xl:w-[21rem] shrink-0 flex flex-col min-h-0">
+                    {/* Tool Inspector Tabs */}
+                    <div className="grid grid-cols-4 gap-1 p-1 bg-paper2 rounded-input border border-rule mb-3 shrink-0">
+                        <button
+                            type="button"
+                            onClick={() => setActiveInspectorTab('cuts')}
+                            className={`py-1.5 px-1 rounded-input text-xs lowercase flex items-center justify-center gap-1 transition-colors ${
+                                activeInspectorTab === 'cuts'
+                                    ? 'bg-paper text-ink font-semibold shadow-sm border border-rule'
+                                    : 'text-muted hover:text-ink'
+                            }`}
+                        >
+                            <Scissors size={12} /> cuts
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setActiveInspectorTab('captions')}
+                            className={`py-1.5 px-1 rounded-input text-xs lowercase flex items-center justify-center gap-1 transition-colors ${
+                                activeInspectorTab === 'captions'
+                                    ? 'bg-paper text-ink font-semibold shadow-sm border border-rule'
+                                    : 'text-muted hover:text-ink'
+                            }`}
+                        >
+                            <Type size={12} /> captions
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setActiveInspectorTab('effects')}
+                            className={`py-1.5 px-1 rounded-input text-xs lowercase flex items-center justify-center gap-1 transition-colors ${
+                                activeInspectorTab === 'effects'
+                                    ? 'bg-paper text-ink font-semibold shadow-sm border border-rule'
+                                    : 'text-muted hover:text-ink'
+                            }`}
+                        >
+                            <Sparkles size={12} /> effects
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setActiveInspectorTab('audio')}
+                            className={`py-1.5 px-1 rounded-input text-xs lowercase flex items-center justify-center gap-1 transition-colors ${
+                                activeInspectorTab === 'audio'
+                                    ? 'bg-paper text-ink font-semibold shadow-sm border border-rule'
+                                    : 'text-muted hover:text-ink'
+                            }`}
+                        >
+                            <Volume2 size={12} /> audio
+                        </button>
+                    </div>
+
                     <div className="flex-1 xl:overflow-y-auto custom-scrollbar pr-1 space-y-5">
-                        {/* segments */}
-                        <div>
-                            <div className="flex items-center justify-between mb-2">
-                                <p className="eyebrow">Segments · {segments.length}/{limits.max_segments}</p>
-                                <div className="flex items-center gap-1">
-                                    <button className="p-1.5 rounded-input text-muted hover:text-ink hover:bg-paper3 disabled:opacity-45" disabled={!state.past.length} onClick={() => dispatch({ type: 'undo' })} aria-label="undo"><Undo2 size={14} /></button>
-                                    <button className="p-1.5 rounded-input text-muted hover:text-ink hover:bg-paper3 disabled:opacity-45" disabled={!state.future.length} onClick={() => dispatch({ type: 'redo' })} aria-label="redo"><Redo2 size={14} /></button>
-                                </div>
-                            </div>
-                            <div className="space-y-2">
-                                {segments.map((seg, i) => (
-                                    <div
-                                        key={i}
-                                        onClick={() => dispatch({ type: 'select', index: i })}
-                                        className={`rounded-input border p-2.5 cursor-pointer transition-colors ${i === selected ? 'border-[color:var(--color-accent)] bg-paper3' : 'border-rule hover:bg-paper3'} ${outOfRange(seg) ? 'border-[color:var(--color-danger)]' : ''}`}
-                                    >
-                                        <div className="flex items-center gap-2">
-                                            <span className="w-4 h-4 rounded-full shrink-0" style={{ background: SEGMENT_COLORS[i % SEGMENT_COLORS.length] }} />
-                                            <span className="readout">#{i + 1}</span>
-                                            <input
-                                                type="number"
-                                                step="0.1"
-                                                value={seg.start}
-                                                onClick={(e) => e.stopPropagation()}
-                                                onChange={(e) => setSegment(i, { start: parseFloat(e.target.value) || 0 }, { snap: false })}
-                                                className="input-field w-20 py-1 px-1.5 text-xs text-center"
-                                                aria-label={`segment ${i + 1} start`}
-                                            />
-                                            <span className="text-muted text-xs">→</span>
-                                            <input
-                                                type="number"
-                                                step="0.1"
-                                                value={seg.end}
-                                                onClick={(e) => e.stopPropagation()}
-                                                onChange={(e) => setSegment(i, { end: parseFloat(e.target.value) || 0 }, { snap: false })}
-                                                className="input-field w-20 py-1 px-1.5 text-xs text-center"
-                                                aria-label={`segment ${i + 1} end`}
-                                            />
-                                            <span className="readout ml-auto">{fmt(seg.end - seg.start)}</span>
+                        {/* ─── TAB 1: CUTS & SEGMENTS ─── */}
+                        {activeInspectorTab === 'cuts' && (
+                            <>
+                                {/* segments */}
+                                <div>
+                                    <div className="flex items-center justify-between mb-2">
+                                        <p className="eyebrow">Segments · {segments.length}/{limits.max_segments}</p>
+                                        <div className="flex items-center gap-1">
+                                            <button className="p-1.5 rounded-input text-muted hover:text-ink hover:bg-paper3 disabled:opacity-45" disabled={!state.past.length} onClick={() => dispatch({ type: 'undo' })} aria-label="undo"><Undo2 size={14} /></button>
+                                            <button className="p-1.5 rounded-input text-muted hover:text-ink hover:bg-paper3 disabled:opacity-45" disabled={!state.future.length} onClick={() => dispatch({ type: 'redo' })} aria-label="redo"><Redo2 size={14} /></button>
                                         </div>
-                                        <div className="flex items-center gap-1 mt-2">
-                                            {sourceOpen && (
-                                                <button className="p-1 rounded-input text-muted hover:text-ink hover:bg-paper" onClick={(e) => { e.stopPropagation(); dispatch({ type: 'select', index: i }); seekSource(seg.start); }} aria-label="show this segment in the source monitor"><Film size={13} /></button>
-                                            )}
-                                            <button className="p-1 rounded-input text-muted hover:text-ink hover:bg-paper disabled:opacity-45" disabled={i === 0} onClick={(e) => { e.stopPropagation(); moveSegment(i, -1); }} aria-label="move up"><ChevronUp size={13} /></button>
-                                            <button className="p-1 rounded-input text-muted hover:text-ink hover:bg-paper disabled:opacity-45" disabled={i === segments.length - 1} onClick={(e) => { e.stopPropagation(); moveSegment(i, 1); }} aria-label="move down"><ChevronDown size={13} /></button>
-                                            <button className="p-1 rounded-input text-muted hover:text-ink hover:bg-paper disabled:opacity-45" disabled={seg.end - seg.start < minSeg * 2 || segments.length >= limits.max_segments} onClick={(e) => { e.stopPropagation(); splitSegment(i); }} aria-label="split segment"><Scissors size={13} /></button>
-                                            <button className="p-1 rounded-input text-muted hover:text-danger hover:bg-paper disabled:opacity-45 ml-auto" disabled={segments.length <= 1} onClick={(e) => { e.stopPropagation(); deleteSegment(i); }} aria-label="delete segment"><Trash2 size={13} /></button>
-                                        </div>
-                                        {outOfRange(seg) && (
-                                            <p className="text-[11px] text-danger mt-1.5 lowercase">outside the original range — the source video is gone</p>
-                                        )}
                                     </div>
-                                ))}
-                            </div>
-                            <button
-                                onClick={addSegment}
-                                disabled={segments.length >= limits.max_segments}
-                                className="mt-2 w-full flex items-center justify-center gap-1.5 py-2 rounded-input border border-dashed border-rule2 text-xs lowercase text-ink2 hover:bg-paper3 transition-colors disabled:opacity-45"
-                            >
-                                <Plus size={14} /> add segment
-                            </button>
-                            {!sourceAvailable && (
-                                <p className="text-[11px] text-muted mt-2 leading-relaxed">
-                                    the source video is no longer on the server, so cuts are
-                                    limited to the original clip range (extending or reframing
-                                    needs it; newly processed videos keep theirs)
-                                </p>
-                            )}
-                        </div>
-
-                        {/* framing override */}
-                        <div>
-                            <p className="eyebrow mb-2">Framing</p>
-                            <div className="grid grid-cols-3 gap-1.5">
-                                {[
-                                    { value: 'auto', label: 'auto', hint: 'AI decides per scene' },
-                                    { value: 'full', label: 'full frame', hint: 'whole shot, no side-crop' },
-                                    { value: 'track', label: 'track subject', hint: 'crop follows the person' },
-                                ].map((f) => (
+                                    <div className="space-y-2">
+                                        {segments.map((seg, i) => (
+                                            <div
+                                                key={i}
+                                                onClick={() => dispatch({ type: 'select', index: i })}
+                                                className={`rounded-input border p-2.5 cursor-pointer transition-colors ${i === selected ? 'border-[color:var(--color-accent)] bg-paper3' : 'border-rule hover:bg-paper3'} ${outOfRange(seg) ? 'border-[color:var(--color-danger)]' : ''}`}
+                                            >
+                                                <div className="flex items-center gap-2">
+                                                    <span className="w-4 h-4 rounded-full shrink-0" style={{ background: SEGMENT_COLORS[i % SEGMENT_COLORS.length] }} />
+                                                    <span className="readout">#{i + 1}</span>
+                                                    <input
+                                                        type="number"
+                                                        step="0.1"
+                                                        value={seg.start}
+                                                        onClick={(e) => e.stopPropagation()}
+                                                        onChange={(e) => setSegment(i, { start: parseFloat(e.target.value) || 0 }, { snap: false })}
+                                                        className="input-field w-20 py-1 px-1.5 text-xs text-center"
+                                                        aria-label={`segment ${i + 1} start`}
+                                                    />
+                                                    <span className="text-muted text-xs">→</span>
+                                                    <input
+                                                        type="number"
+                                                        step="0.1"
+                                                        value={seg.end}
+                                                        onClick={(e) => e.stopPropagation()}
+                                                        onChange={(e) => setSegment(i, { end: parseFloat(e.target.value) || 0 }, { snap: false })}
+                                                        className="input-field w-20 py-1 px-1.5 text-xs text-center"
+                                                        aria-label={`segment ${i + 1} end`}
+                                                    />
+                                                    <span className="readout ml-auto">{fmt(seg.end - seg.start)}</span>
+                                                </div>
+                                                <div className="flex items-center gap-1 mt-2">
+                                                    {sourceOpen && (
+                                                        <button className="p-1 rounded-input text-muted hover:text-ink hover:bg-paper" onClick={(e) => { e.stopPropagation(); dispatch({ type: 'select', index: i }); seekSource(seg.start); }} aria-label="show this segment in the source monitor"><Film size={13} /></button>
+                                                    )}
+                                                    <button className="p-1 rounded-input text-muted hover:text-ink hover:bg-paper disabled:opacity-45" disabled={i === 0} onClick={(e) => { e.stopPropagation(); moveSegment(i, -1); }} aria-label="move up"><ChevronUp size={13} /></button>
+                                                    <button className="p-1 rounded-input text-muted hover:text-ink hover:bg-paper disabled:opacity-45" disabled={i === segments.length - 1} onClick={(e) => { e.stopPropagation(); moveSegment(i, 1); }} aria-label="move down"><ChevronDown size={13} /></button>
+                                                    <button className="p-1 rounded-input text-muted hover:text-ink hover:bg-paper disabled:opacity-45" disabled={seg.end - seg.start < minSeg * 2 || segments.length >= limits.max_segments} onClick={(e) => { e.stopPropagation(); splitSegment(i); }} aria-label="split segment"><Scissors size={13} /></button>
+                                                    <button className="p-1 rounded-input text-muted hover:text-danger hover:bg-paper disabled:opacity-45 ml-auto" disabled={segments.length <= 1} onClick={(e) => { e.stopPropagation(); deleteSegment(i); }} aria-label="delete segment"><Trash2 size={13} /></button>
+                                                </div>
+                                                {outOfRange(seg) && (
+                                                    <p className="text-[11px] text-danger mt-1.5 lowercase">outside the original range — the source video is gone</p>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
                                     <button
-                                        key={f.value}
-                                        type="button"
-                                        title={f.hint}
-                                        disabled={f.value !== 'auto' && !sourceAvailable}
-                                        onClick={() => setFraming(f.value)}
-                                        className={`py-1.5 px-2 rounded-input border text-xs lowercase transition-colors
-                                            ${framing === f.value
-                                                ? 'border-[color:var(--color-accent)] text-ink'
-                                                : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}
-                                            disabled:opacity-40 disabled:cursor-not-allowed`}
+                                        onClick={addSegment}
+                                        disabled={segments.length >= limits.max_segments}
+                                        className="mt-2 w-full flex items-center justify-center gap-1.5 py-2 rounded-input border border-dashed border-rule2 text-xs lowercase text-ink2 hover:bg-paper3 transition-colors disabled:opacity-45"
                                     >
-                                        {f.label}
+                                        <Plus size={14} /> add segment
                                     </button>
-                                ))}
+                                </div>
+
+                                {/* framing override */}
+                                <div>
+                                    <p className="eyebrow mb-2">Framing</p>
+                                    <div className="grid grid-cols-3 gap-1.5">
+                                        {[
+                                            { value: 'auto', label: 'auto', hint: 'AI decides per scene' },
+                                            { value: 'full', label: 'full frame', hint: 'whole shot, no side-crop' },
+                                            { value: 'track', label: 'track subject', hint: 'crop follows the person' },
+                                        ].map((f) => (
+                                            <button
+                                                key={f.value}
+                                                type="button"
+                                                title={f.hint}
+                                                disabled={f.value !== 'auto' && !sourceAvailable}
+                                                onClick={() => setFraming(f.value)}
+                                                className={`py-1.5 px-2 rounded-input border text-xs lowercase transition-colors
+                                                    ${framing === f.value
+                                                        ? 'border-[color:var(--color-accent)] text-ink'
+                                                        : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}
+                                                    disabled:opacity-40 disabled:cursor-not-allowed`}
+                                            >
+                                                {f.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* toggles */}
+                                <div className="space-y-2.5">
+                                    <label className="flex items-center justify-between cursor-pointer">
+                                        <span className="text-xs lowercase text-ink2">snap cuts to words</span>
+                                        <span className="relative inline-flex items-center">
+                                            <input type="checkbox" checked={snapToWords} onChange={(e) => setSnapToWords(e.target.checked)} className="sr-only peer" />
+                                            <span className="w-8 h-4 rounded-full bg-paper3 peer-checked:bg-brass transition-colors after:content-[''] after:absolute after:left-0.5 after:top-0.5 after:w-3 after:h-3 after:rounded-full after:bg-ink after:transition-transform peer-checked:after:translate-x-4" />
+                                        </span>
+                                    </label>
+                                    <label className="flex items-center justify-between cursor-pointer">
+                                        <span className="text-xs lowercase text-ink2">re-apply captions after recut</span>
+                                        <span className="relative inline-flex items-center">
+                                            <input type="checkbox" checked={reapplyCaptions} onChange={(e) => setReapplyCaptions(e.target.checked)} className="sr-only peer" />
+                                            <span className="w-8 h-4 rounded-full bg-paper3 peer-checked:bg-brass transition-colors after:content-[''] after:absolute after:left-0.5 after:top-0.5 after:w-3 after:h-3 after:rounded-full after:bg-ink after:transition-transform peer-checked:after:translate-x-4" />
+                                        </span>
+                                    </label>
+                                </div>
+
+                                <InspectorActionBar
+                                    isDirty={dirty}
+                                    isApplying={rendering}
+                                    applyLabel={needsSourcePath ? 're-render from source' : 're-render clip'}
+                                    cancelLabel="discard cuts"
+                                    onApply={doRender}
+                                    onCancel={() => {
+                                        if (edl?.recipe?.segments) {
+                                            dispatch({ type: 'init', segments: edl.recipe.segments });
+                                            setFraming(renderedFraming);
+                                        }
+                                    }}
+                                    description={dirty ? `${fmt(missingSeconds)} unrendered` : 'cuts synchronized'}
+                                />
+                            </>
+                        )}
+
+                        {/* ─── TAB 2: CAPTIONS INSPECTOR ─── */}
+                        {activeInspectorTab === 'captions' && (
+                            <div className="space-y-4">
+                                <div>
+                                    <p className="eyebrow mb-1.5">Caption Preset</p>
+                                    <div className="grid grid-cols-2 gap-1.5">
+                                        {[
+                                            { id: 'tiktok', label: 'TikTok Glow', highlight: '#FE2C55', font: 'Verdana' },
+                                            { id: 'shorts', label: 'Shorts Pop', highlight: '#FF0000', font: 'Impact' },
+                                            { id: 'gold', label: 'Gold Authority', highlight: '#FFD700', font: 'Montserrat' },
+                                            { id: 'neon', label: 'Cyber Neon', highlight: '#00FF88', font: 'Verdana' },
+                                        ].map((preset) => (
+                                            <button
+                                                key={preset.id}
+                                                type="button"
+                                                onClick={() => setDraftCaptions(prev => ({
+                                                    ...prev,
+                                                    style: 'karaoke',
+                                                    fontName: preset.font,
+                                                    highlightColor: preset.highlight,
+                                                }))}
+                                                className={`p-2 rounded-input border text-xs text-left transition-colors flex items-center justify-between ${
+                                                    draftCaptions.highlightColor === preset.highlight
+                                                        ? 'border-[color:var(--color-accent)] bg-paper3'
+                                                        : 'border-rule hover:bg-paper3 text-muted'
+                                                }`}
+                                            >
+                                                <span className="font-semibold text-ink">{preset.label}</span>
+                                                <span className="w-3 h-3 rounded-full" style={{ background: preset.highlight }} />
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <p className="eyebrow mb-1.5">Font Family</p>
+                                    <select
+                                        value={draftCaptions.fontName}
+                                        onChange={(e) => setDraftCaptions(prev => ({ ...prev, fontName: e.target.value }))}
+                                        className="input-field w-full py-1.5 px-2 text-xs"
+                                    >
+                                        <option value="Verdana">Verdana (Clean Sans)</option>
+                                        <option value="Impact">Impact (Heavy Viral)</option>
+                                        <option value="Arial">Arial (Standard)</option>
+                                        <option value="Helvetica">Helvetica (Modern)</option>
+                                        <option value="Georgia">Georgia (Serif Narrative)</option>
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <div className="flex justify-between mb-1">
+                                        <p className="eyebrow">Font Size</p>
+                                        <span className="readout">{draftCaptions.fontSize}px</span>
+                                    </div>
+                                    <input
+                                        type="range"
+                                        min="28"
+                                        max="64"
+                                        value={draftCaptions.fontSize}
+                                        onChange={(e) => setDraftCaptions(prev => ({ ...prev, fontSize: parseInt(e.target.value) }))}
+                                        className="w-full accent-[var(--color-accent)]"
+                                    />
+                                </div>
+
+                                <div>
+                                    <p className="eyebrow mb-1.5">Screen Position</p>
+                                    <div className="grid grid-cols-3 gap-1.5">
+                                        {[
+                                            { id: 'bottom', label: 'bottom (safe zone)' },
+                                            { id: 'middle', label: 'middle' },
+                                            { id: 'top', label: 'top' },
+                                        ].map((pos) => (
+                                            <button
+                                                key={pos.id}
+                                                type="button"
+                                                onClick={() => setDraftCaptions(prev => ({ ...prev, position: pos.id }))}
+                                                className={`py-1.5 px-1.5 rounded-input border text-xs lowercase transition-colors ${
+                                                    draftCaptions.position === pos.id
+                                                        ? 'border-[color:var(--color-accent)] text-ink'
+                                                        : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'
+                                                }`}
+                                            >
+                                                {pos.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    <p className="text-[11px] text-muted mt-1.5">
+                                        Bottom anchors strictly in the safe margin zone (Y: ~75%–85%) away from UI controls.
+                                    </p>
+                                </div>
+
+                                <InspectorActionBar
+                                    isDirty={isCaptionsDirty}
+                                    applyLabel="Apply Captions"
+                                    cancelLabel="Discard"
+                                    onApply={() => {
+                                        setAppliedCaptions({ ...draftCaptions });
+                                        setReapplyCaptions(true);
+                                    }}
+                                    onCancel={() => setDraftCaptions({ ...appliedCaptions })}
+                                    description={isCaptionsDirty ? 'staged caption styling' : 'captions committed'}
+                                />
                             </div>
-                            {!sourceAvailable && (
-                                <p className="text-[11px] text-muted mt-1.5 leading-relaxed">
-                                    framing changes need the source video, which is no longer on the server
-                                </p>
-                            )}
-                            {framing !== renderedFraming && (
-                                <p className="text-[11px] text-muted mt-1.5 leading-relaxed">
-                                    changing the framing re-runs the reframe engine (slower than a fast recut)
-                                </p>
-                            )}
-                        </div>
+                        )}
 
-                        {/* toggles */}
-                        <div className="space-y-2.5">
-                            <label className="flex items-center justify-between cursor-pointer">
-                                <span className="text-xs lowercase text-ink2">snap cuts to words</span>
-                                <span className="relative inline-flex items-center">
-                                    <input type="checkbox" checked={snapToWords} onChange={(e) => setSnapToWords(e.target.checked)} className="sr-only peer" />
-                                    <span className="w-8 h-4 rounded-full bg-paper3 peer-checked:bg-brass transition-colors after:content-[''] after:absolute after:left-0.5 after:top-0.5 after:w-3 after:h-3 after:rounded-full after:bg-ink after:transition-transform peer-checked:after:translate-x-4" />
-                                </span>
-                            </label>
-                            <label className="flex items-center justify-between cursor-pointer">
-                                <span className="text-xs lowercase text-ink2">re-apply captions after recut</span>
-                                <span className="relative inline-flex items-center">
-                                    <input type="checkbox" checked={reapplyCaptions} onChange={(e) => setReapplyCaptions(e.target.checked)} className="sr-only peer" />
-                                    <span className="w-8 h-4 rounded-full bg-paper3 peer-checked:bg-brass transition-colors after:content-[''] after:absolute after:left-0.5 after:top-0.5 after:w-3 after:h-3 after:rounded-full after:bg-ink after:transition-transform peer-checked:after:translate-x-4" />
-                                </span>
-                            </label>
-                        </div>
+                        {/* ─── TAB 3: EFFECTS & FILTERS INSPECTOR ─── */}
+                        {activeInspectorTab === 'effects' && (
+                            <div className="space-y-4">
+                                <div>
+                                    <div className="flex justify-between mb-1">
+                                        <p className="eyebrow">Brightness</p>
+                                        <span className="readout">{Math.round(draftEffects.brightness * 100)}%</span>
+                                    </div>
+                                    <input
+                                        type="range"
+                                        min="80"
+                                        max="130"
+                                        value={Math.round(draftEffects.brightness * 100)}
+                                        onChange={(e) => setDraftEffects(prev => ({ ...prev, brightness: parseInt(e.target.value) / 100 }))}
+                                        className="w-full accent-[var(--color-accent)]"
+                                    />
+                                </div>
 
-                        {/* keyboard legend — moved off the clip track, which no longer
-                            has the width for it */}
-                        <div>
-                            <p className="eyebrow mb-2">Shortcuts</p>
-                            <p className="readout leading-relaxed">
-                                SPACE PLAY · S SPLIT · ⌫ DELETE · ⌘Z UNDO
-                                {sourceOpen && ' · I MARK IN · O MARK OUT · , INSERT · . REPLACE'}
-                            </p>
-                        </div>
+                                <div>
+                                    <div className="flex justify-between mb-1">
+                                        <p className="eyebrow">Contrast</p>
+                                        <span className="readout">{Math.round(draftEffects.contrast * 100)}%</span>
+                                    </div>
+                                    <input
+                                        type="range"
+                                        min="80"
+                                        max="140"
+                                        value={Math.round(draftEffects.contrast * 100)}
+                                        onChange={(e) => setDraftEffects(prev => ({ ...prev, contrast: parseInt(e.target.value) / 100 }))}
+                                        className="w-full accent-[var(--color-accent)]"
+                                    />
+                                </div>
+
+                                <div>
+                                    <div className="flex justify-between mb-1">
+                                        <p className="eyebrow">Color Saturation</p>
+                                        <span className="readout">{Math.round(draftEffects.saturation * 100)}%</span>
+                                    </div>
+                                    <input
+                                        type="range"
+                                        min="70"
+                                        max="150"
+                                        value={Math.round(draftEffects.saturation * 100)}
+                                        onChange={(e) => setDraftEffects(prev => ({ ...prev, saturation: parseInt(e.target.value) / 100 }))}
+                                        className="w-full accent-[var(--color-accent)]"
+                                    />
+                                </div>
+
+                                <div className="space-y-2.5 pt-2 border-t border-rule">
+                                    <label className="flex items-center justify-between cursor-pointer">
+                                        <span className="text-xs lowercase text-ink2">cinematic edge vignette</span>
+                                        <span className="relative inline-flex items-center">
+                                            <input
+                                                type="checkbox"
+                                                checked={draftEffects.vignette}
+                                                onChange={(e) => setDraftEffects(prev => ({ ...prev, vignette: e.target.checked }))}
+                                                className="sr-only peer"
+                                            />
+                                            <span className="w-8 h-4 rounded-full bg-paper3 peer-checked:bg-brass transition-colors after:content-[''] after:absolute after:left-0.5 after:top-0.5 after:w-3 after:h-3 after:rounded-full after:bg-ink after:transition-transform peer-checked:after:translate-x-4" />
+                                        </span>
+                                    </label>
+
+                                    <label className="flex items-center justify-between cursor-pointer">
+                                        <span className="text-xs lowercase text-ink2">dynamic punch-in zooms</span>
+                                        <span className="relative inline-flex items-center">
+                                            <input
+                                                type="checkbox"
+                                                checked={draftEffects.punchInZoom}
+                                                onChange={(e) => setDraftEffects(prev => ({ ...prev, punchInZoom: e.target.checked }))}
+                                                className="sr-only peer"
+                                            />
+                                            <span className="w-8 h-4 rounded-full bg-paper3 peer-checked:bg-brass transition-colors after:content-[''] after:absolute after:left-0.5 after:top-0.5 after:w-3 after:h-3 after:rounded-full after:bg-ink after:transition-transform peer-checked:after:translate-x-4" />
+                                        </span>
+                                    </label>
+                                </div>
+
+                                <InspectorActionBar
+                                    isDirty={isEffectsDirty}
+                                    applyLabel="Apply Visual Polish"
+                                    cancelLabel="Discard"
+                                    onApply={() => setAppliedEffects({ ...draftEffects })}
+                                    onCancel={() => setDraftEffects({ ...appliedEffects })}
+                                    description={isEffectsDirty ? 'staged color/filter grading' : 'effects applied'}
+                                />
+                            </div>
+                        )}
+
+                        {/* ─── TAB 4: AUDIO INSPECTOR ─── */}
+                        {activeInspectorTab === 'audio' && (
+                            <div className="space-y-4">
+                                <div>
+                                    <div className="flex justify-between mb-1">
+                                        <p className="eyebrow">Silence Cut Threshold</p>
+                                        <span className="readout">{draftAudio.silenceThresholdSec}s</span>
+                                    </div>
+                                    <input
+                                        type="range"
+                                        min="15"
+                                        max="80"
+                                        value={Math.round(draftAudio.silenceThresholdSec * 100)}
+                                        onChange={(e) => setDraftAudio(prev => ({ ...prev, silenceThresholdSec: parseInt(e.target.value) / 100 }))}
+                                        className="w-full accent-[var(--color-accent)]"
+                                    />
+                                    <p className="text-[11px] text-muted mt-1">
+                                        0.2s is aggressive creator pacing; 0.6s is relaxed documentary pacing.
+                                    </p>
+                                </div>
+
+                                <div className="space-y-2.5 pt-2 border-t border-rule">
+                                    <label className="flex items-center justify-between cursor-pointer">
+                                        <span className="text-xs lowercase text-ink2">filler word removal (um/uh)</span>
+                                        <span className="relative inline-flex items-center">
+                                            <input
+                                                type="checkbox"
+                                                checked={draftAudio.fillerWordCutting}
+                                                onChange={(e) => setDraftAudio(prev => ({ ...prev, fillerWordCutting: e.target.checked }))}
+                                                className="sr-only peer"
+                                            />
+                                            <span className="w-8 h-4 rounded-full bg-paper3 peer-checked:bg-brass transition-colors after:content-[''] after:absolute after:left-0.5 after:top-0.5 after:w-3 after:h-3 after:rounded-full after:bg-ink after:transition-transform peer-checked:after:translate-x-4" />
+                                        </span>
+                                    </label>
+
+                                    <label className="flex items-center justify-between cursor-pointer">
+                                        <span className="text-xs lowercase text-ink2">spectral audio denoise</span>
+                                        <span className="relative inline-flex items-center">
+                                            <input
+                                                type="checkbox"
+                                                checked={draftAudio.audioDenoise}
+                                                onChange={(e) => setDraftAudio(prev => ({ ...prev, audioDenoise: e.target.checked }))}
+                                                className="sr-only peer"
+                                            />
+                                            <span className="w-8 h-4 rounded-full bg-paper3 peer-checked:bg-brass transition-colors after:content-[''] after:absolute after:left-0.5 after:top-0.5 after:w-3 after:h-3 after:rounded-full after:bg-ink after:transition-transform peer-checked:after:translate-x-4" />
+                                        </span>
+                                    </label>
+
+                                    <label className="flex items-center justify-between cursor-pointer">
+                                        <span className="text-xs lowercase text-ink2">transition whoosh SFX</span>
+                                        <span className="relative inline-flex items-center">
+                                            <input
+                                                type="checkbox"
+                                                checked={draftAudio.transitionSfx}
+                                                onChange={(e) => setDraftAudio(prev => ({ ...prev, transitionSfx: e.target.checked }))}
+                                                className="sr-only peer"
+                                            />
+                                            <span className="w-8 h-4 rounded-full bg-paper3 peer-checked:bg-brass transition-colors after:content-[''] after:absolute after:left-0.5 after:top-0.5 after:w-3 after:h-3 after:rounded-full after:bg-ink after:transition-transform peer-checked:after:translate-x-4" />
+                                        </span>
+                                    </label>
+                                </div>
+
+                                {draftAudio.transitionSfx && (
+                                    <div>
+                                        <div className="flex justify-between mb-1">
+                                            <p className="eyebrow">SFX Volume</p>
+                                            <span className="readout">{Math.round(draftAudio.sfxVolume * 100)}%</span>
+                                        </div>
+                                        <input
+                                            type="range"
+                                            min="5"
+                                            max="50"
+                                            value={Math.round(draftAudio.sfxVolume * 100)}
+                                            onChange={(e) => setDraftAudio(prev => ({ ...prev, sfxVolume: parseInt(e.target.value) / 100 }))}
+                                            className="w-full accent-[var(--color-accent)]"
+                                        />
+                                    </div>
+                                )}
+
+                                <InspectorActionBar
+                                    isDirty={isAudioDirty}
+                                    applyLabel="Apply Audio Settings"
+                                    cancelLabel="Discard"
+                                    onApply={() => setAppliedAudio({ ...draftAudio })}
+                                    onCancel={() => setDraftAudio({ ...appliedAudio })}
+                                    description={isAudioDirty ? 'staged audio profile' : 'audio settings applied'}
+                                />
+                            </div>
+                        )}
                     </div>
 
                     {/* footer actions */}
