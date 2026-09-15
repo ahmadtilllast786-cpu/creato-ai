@@ -116,8 +116,16 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
         setAnimation(p.style === 'karaoke' ? (p.effect === 'pop' ? 'pop' : p.effect === 'glow' ? 'word-highlight' : 'karaoke') : 'none');
     };
 
+    // Remotion preview & caption state
+    const [captions, setCaptions] = useState([]);
+    const [originalCaptions, setOriginalCaptions] = useState([]);
+    const [editableText, setEditableText] = useState('');
+    const [durationSec, setDurationSec] = useState(30);
+    const [captionsLoading, setCaptionsLoading] = useState(false);
+    const [useRemotionPreview, setUseRemotionPreview] = useState(false);
+
     // Snapshot of applied settings for clean cancel/restore
-    const appliedSnapshotRef = React.useRef(null);
+    const appliedSnapshotRef = useRef(null);
 
     useEffect(() => {
         if (isOpen) {
@@ -127,6 +135,8 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                 borderColor, borderWidth, bgColor, bgOpacity, animation,
                 style, effect, baseOpacity, uppercase, activePreset,
                 collisionMode, manualYOffset,
+                editableText,
+                captions: [...captions],
             };
         }
     }, [isOpen]);
@@ -150,6 +160,8 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
             setActivePreset(s.activePreset);
             setCollisionMode(s.collisionMode);
             setManualYOffset(s.manualYOffset);
+            if (s.editableText !== undefined) setEditableText(s.editableText);
+            if (s.captions !== undefined) setCaptions(s.captions);
         }
         onClose();
     };
@@ -169,17 +181,10 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
             uppercase !== s.uppercase ||
             activePreset !== s.activePreset ||
             collisionMode !== s.collisionMode ||
-            manualYOffset !== s.manualYOffset
+            manualYOffset !== s.manualYOffset ||
+            (s.editableText !== undefined && editableText !== s.editableText)
         );
-    }, [position, fontName, fontColor, highlightColor, borderWidth, bgOpacity, style, effect, uppercase, activePreset, collisionMode, manualYOffset]);
-
-    // Remotion preview state
-    const [captions, setCaptions] = useState([]);
-    const [originalCaptions, setOriginalCaptions] = useState([]);
-    const [editableText, setEditableText] = useState('');
-    const [durationSec, setDurationSec] = useState(30);
-    const [captionsLoading, setCaptionsLoading] = useState(false);
-    const [useRemotionPreview, setUseRemotionPreview] = useState(false);
+    }, [position, fontName, fontColor, highlightColor, borderWidth, bgOpacity, style, effect, uppercase, activePreset, collisionMode, manualYOffset, editableText]);
 
     // Fetch word-level captions when modal opens
     useEffect(() => {
@@ -192,9 +197,14 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                 if (data && data.captions && data.captions.length > 0) {
                     setCaptions(data.captions);
                     setOriginalCaptions(data.captions);
-                    setEditableText(data.captions.map(c => c.text).join(' '));
+                    const fullText = data.captions.map(c => c.text).join(' ');
+                    setEditableText(fullText);
                     setDurationSec(data.durationSec || 30);
                     setUseRemotionPreview(true);
+                    if (appliedSnapshotRef.current && !appliedSnapshotRef.current.editableText) {
+                        appliedSnapshotRef.current.editableText = fullText;
+                        appliedSnapshotRef.current.captions = [...data.captions];
+                    }
                 } else {
                     setUseRemotionPreview(false);
                 }
@@ -237,12 +247,26 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
         };
     }, [isOpen, videoUrl]);
 
-    // When user edits text, redistribute words across original timestamps
+    // When user edits or enters text, distribute words across timestamps
     const handleTextEdit = (newText) => {
         setEditableText(newText);
         const newWords = newText.split(/\s+/).filter(w => w.length > 0);
-        if (newWords.length === 0 || originalCaptions.length === 0) {
+        if (newWords.length === 0) {
             setCaptions([]);
+            return;
+        }
+
+        if (originalCaptions.length === 0) {
+            // New caption addition on clips that did not have captions previously
+            const totalDurationMs = (durationSec || 30) * 1000;
+            const wordDurationMs = Math.max(200, Math.floor(totalDurationMs / newWords.length));
+            const newCaptions = newWords.map((word, i) => ({
+                text: word,
+                startMs: Math.round(i * wordDurationMs),
+                endMs: Math.round(Math.min((i + 1) * wordDurationMs, totalDurationMs)),
+            }));
+            setCaptions(newCaptions);
+            if (!useRemotionPreview && videoUrl) setUseRemotionPreview(true);
             return;
         }
 
@@ -508,28 +532,33 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                             />
                         </div>
 
-                        {/* Editable Transcript (collapsible) */}
-                        {useRemotionPreview && (
-                            <div>
-                                <button
-                                    type="button"
-                                    onClick={() => setShowTextEditor(!showTextEditor)}
-                                    className="w-full flex items-center justify-between mb-2"
-                                >
-                                    <span className="eyebrow">Edit text ({captions.length} words)</span>
-                                    <span className={`text-muted transition-transform ${showTextEditor ? 'rotate-180' : ''}`}>▾</span>
-                                </button>
-                                {showTextEditor && (
+                        {/* Caption text & words addition/editing */}
+                        <div>
+                            <button
+                                type="button"
+                                onClick={() => setShowTextEditor(!showTextEditor)}
+                                className="w-full flex items-center justify-between mb-2 hover:opacity-80 transition-opacity"
+                            >
+                                <span className="eyebrow">
+                                    Caption Text {captions.length > 0 ? `(${captions.length} words)` : '(add new)'}
+                                </span>
+                                <span className={`text-muted transition-transform ${showTextEditor ? 'rotate-180' : ''}`}>▾</span>
+                            </button>
+                            {showTextEditor && (
+                                <div className="space-y-1.5 animate-fade">
                                     <textarea
                                         value={editableText}
                                         onChange={(e) => handleTextEdit(e.target.value)}
-                                        rows={5}
-                                        className="input-field resize-none leading-relaxed animate-fade"
-                                        placeholder="Edit subtitle text..."
+                                        rows={4}
+                                        className="input-field resize-none leading-relaxed"
+                                        placeholder="Type or paste caption text here to add or replace subtitles..."
                                     />
-                                )}
-                            </div>
-                        )}
+                                    <p className="text-[10px] text-muted leading-tight">
+                                        Words are timed across the video. Applying will replace previous subtitles.
+                                    </p>
+                                </div>
+                            )}
+                        </div>
 
                         {/* Font Family */}
                         <div>
@@ -647,8 +676,9 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                             // Text edits must survive the server render path too
                             // (issue #69): send the edited words whenever the text
                             // differs from what the transcript produced.
-                            const textEdited = originalCaptions.length > 0
-                                && editableText.trim() !== originalCaptions.map((c) => c.text).join(' ').trim();
+                            const textEdited = (originalCaptions.length > 0
+                                && editableText.trim() !== originalCaptions.map((c) => c.text).join(' ').trim())
+                                || (originalCaptions.length === 0 && editableText.trim().length > 0);
                             const styleOptions = {
                                 position, fontSize, fontName, fontColor, borderColor, borderWidth, bgColor, bgOpacity,
                                 // Karaoke burn (server-side ASS render)
@@ -657,9 +687,10 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                 hasBurnedInCaptions,
                                 collisionMode,
                                 manualYOffset,
+                                clearPreviousSubtitles: true,
                                 // Remotion data
                                 remotion: useRemotionPreview ? subtitleConfig : null,
-                                captions: textEdited ? captions : null,
+                                captions: textEdited ? captions : (captions.length > 0 ? captions : null),
                             };
                             const bulkRunning = bulkProgress?.running;
                             return (
@@ -667,11 +698,11 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                     <InspectorActionBar
                                         isDirty={isDirty || textEdited}
                                         isApplying={isProcessing && !bulkRunning}
-                                        applyLabel={isProcessing && !bulkRunning ? 'applying…' : 'apply to this clip'}
+                                        applyLabel={isProcessing && !bulkRunning ? 'applying captions…' : 'apply captions'}
                                         cancelLabel="cancel"
                                         onApply={() => onGenerate(styleOptions)}
                                         onCancel={handleCancel}
-                                        description={isDirty || textEdited ? 'staged caption styling' : 'captions applied'}
+                                        description={isDirty || textEdited ? 'staged caption edits' : 'captions applied'}
                                     />
                                     {onApplyAll && bulkCount > 1 && (
                                         <button

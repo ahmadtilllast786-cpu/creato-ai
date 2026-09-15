@@ -532,17 +532,17 @@ def _canonical_clip_file(output_dir, base_name, index):
 
 
 def _strip_burned_captions(output_dir, filename):
-    """Walk ``subtitled_<ts>_`` prefixes back to the file without burned captions.
-
-    Returns the name unchanged when there is nothing to strip (or when the
-    underlying file is gone, e.g. a library restore that only kept the current
-    version).
-    """
+    """Walk ``subtitled_<ts>_`` prefixes back to the file without burned captions."""
     while True:
         m = re.match(r'^subtitled_\d+_(.+)$', filename)
-        if not m or not os.path.exists(os.path.join(output_dir, m.group(1))):
-            return filename
-        filename = m.group(1)
+        if not m:
+            break
+        target = m.group(1)
+        if os.path.exists(os.path.join(output_dir, target)):
+            filename = target
+        else:
+            filename = target
+    return filename
 
 
 def _strip_burned_hook(output_dir, filename):
@@ -4742,12 +4742,40 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
              filename = f"{base_name}_clip_{req.clip_index+1}.mp4"
 
     # Re-subtitling must replace previous subtitles instead of burning over them.
-    filename = _strip_burned_captions(output_dir, filename)
+    clean_target = _strip_burned_captions(output_dir, filename)
 
+    # If the clean target still has subtitles in the name (e.g. hooked_<ts>_subtitled_<ts>_<base>),
+    # or if input_path doesn't exist, resolve to the base cut and re-hook if needed:
+    if "subtitled_" in clean_target or not os.path.exists(os.path.join(output_dir, clean_target)):
+        base_clean = get_base_cut_filename(output_dir, filename)
+        if os.path.exists(os.path.join(output_dir, base_clean)):
+            # Check if there was an active hook on this clip that should be maintained under captions
+            hook_meta = clip_data.get('auto_hook')
+            if hook_meta and hook_meta.get('text'):
+                hook_only_name = f"hooked_{int(time.time())}_{base_clean}"
+                hook_only_path = os.path.join(output_dir, hook_only_name)
+                size_map = {"S": 0.8, "M": 1.0, "L": 1.3}
+                font_scale = size_map.get(hook_meta.get('size', 'M'), 1.0)
+                try:
+                    add_hook_to_video(
+                        os.path.join(output_dir, base_clean),
+                        hook_meta['text'],
+                        hook_only_path,
+                        position=hook_meta.get('position', 'top'),
+                        font_scale=font_scale,
+                        duration=hook_meta.get('duration_seconds'),
+                        style=hook_meta.get('style', 'classic')
+                    )
+                    clean_target = hook_only_name
+                except Exception as e:
+                    print(f"⚠️ Could not re-burn hook under new subtitles: {e}")
+                    clean_target = base_clean
+            else:
+                clean_target = base_clean
+
+    filename = clean_target
     input_path = os.path.join(output_dir, filename)
     if not os.path.exists(input_path):
-        # Try looking for edited version if url implied it?
-        # Just fail if not found.
         raise HTTPException(status_code=404, detail=f"Video file not found: {input_path}")
 
     # Define outputs
@@ -5029,8 +5057,9 @@ async def add_hook(req: HookRequest, request: Request):
 
         try:
             # Run in thread pool
+            hook_duration = None if (req.duration_seconds is None or req.duration_seconds <= 0) else req.duration_seconds
             def run_hook():
-                add_hook_to_video(input_path, req.text, output_path, position=req.position, font_scale=font_scale, duration=req.duration_seconds, style=req.style)
+                add_hook_to_video(input_path, req.text, output_path, position=req.position, font_scale=font_scale, duration=hook_duration, style=req.style)
 
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, run_hook)

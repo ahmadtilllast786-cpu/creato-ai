@@ -55,6 +55,11 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
         do { prev = f; f = f.replace(/^subtitled_\d+_/, '').replace(/^hooked_\d+_/, '').replace(/^hook_/, ''); } while (f !== prev);
         return f;
     };
+    const stripSubtitlesOnly = (filename) => {
+        let f = filename || '', prev;
+        do { prev = f; f = f.replace(/^subtitled_\d+_/, ''); } while (f !== prev);
+        return f;
+    };
     const originalVideoUrl = rawVideoUrl ? getApiUrl(rawVideoUrl.replace(/[^/]+$/, stripBurns(rawVideoUrl.split('/').pop()))) : '';
     const [currentVideoUrl, setCurrentVideoUrl] = useState(() => getApiUrl(rawVideoUrl));
     // Where the <video> element pulls its bytes from. The clips are archived to
@@ -479,7 +484,10 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 return;
             }
 
-            // Fallback: legacy FFmpeg
+            // Strip any previously burned subtitles from the input filename
+            // so the server derives from clean footage without stacking old subtitles
+            const cleanSubInput = stripSubtitlesOnly(serverVideoFile);
+
             const res = await apiFetch('/api/subtitle', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -502,7 +510,7 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     collision_mode: options.collisionMode || 'smart_reposition',
                     manual_y_offset: options.manualYOffset ?? null,
                     has_burned_in_captions: options.hasBurnedInCaptions ?? false,
-                    input_filename: serverVideoFile,
+                    input_filename: cleanSubInput,
                     // Edited caption text (clip-relative ms); null = server
                     // regenerates from the transcript as before.
                     words: options.captions || null
@@ -531,7 +539,9 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 } else {
                     setCurrentVideoUrl(serverUrl);
                 }
-                if (videoRef.current) videoRef.current.load();
+                setTimeout(() => {
+                    if (videoRef.current) videoRef.current.load();
+                }, 50);
                 setShowSubtitleModal(false);
             }
         } catch (e) {
@@ -546,6 +556,14 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
         setIsHooking(true);
         setEditError(null);
         try {
+            const isForever = Boolean(
+                hookData.displayForever ||
+                hookData.remotion?.displayForever ||
+                hookData.duration_seconds === null ||
+                hookData.duration_seconds === undefined ||
+                hookData.duration_seconds <= 0
+            );
+
             if (hookData.remotion && !hasServerBurns) {
                 // Accumulate layer and render all layers together
                 const newLayers = { ...activeLayers, hook: hookData.remotion };
@@ -558,7 +576,9 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     effects: newLayers.effects,
                 });
                 setCurrentVideoUrl(blobUrl);
-                if (videoRef.current) videoRef.current.load();
+                setTimeout(() => {
+                    if (videoRef.current) videoRef.current.load();
+                }, 50);
                 setShowHookModal(false);
                 return;
             }
@@ -575,10 +595,10 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     job_id: jobId,
                     clip_index: index,
                     text: payload.text,
-                    position: payload.position,
-                    size: payload.size,
+                    position: payload.position || 'top',
+                    size: payload.size || 'M',
                     style: payload.style || 'classic',
-                    duration_seconds: payload.remotion?.displayDurationSec ?? null,
+                    duration_seconds: isForever ? null : (payload.duration_seconds || payload.remotion?.displayDurationSec || null),
                     input_filename: serverVideoFile
                 })
             });
@@ -589,7 +609,9 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                 setCurrentVideoUrl(getApiUrl(data.new_video_url));
                 setServerVideoFile(data.new_video_url.split('/').pop());
                 setBurnedHook(data.burned_hook?.text ?? payload.text ?? null);
-                if (videoRef.current) videoRef.current.load();
+                setTimeout(() => {
+                    if (videoRef.current) videoRef.current.load();
+                }, 50);
                 setShowHookModal(false);
             }
         } catch (e) {

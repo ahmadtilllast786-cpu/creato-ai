@@ -48,10 +48,18 @@ export type HookEntrance = "spring" | "fade" | "slide-up" | "none";
 export type HookStyle =
   | "classic"
   | "dark"
+  | "white_card"
   | "yellow"
   | "red"
+  | "neon"
+  | "emerald"
+  | "purple"
+  | "orange"
+  | "pill"
+  | "breaking_news"
   | "outline"
-  | "outline_yellow";
+  | "outline_yellow"
+  | string;
 
 export interface HookConfig {
   text: string;
@@ -59,7 +67,12 @@ export interface HookConfig {
   size: HookSize;
   style?: HookStyle;
   entranceAnimation: HookEntrance;
-  displayDurationSec: number;
+  displayDurationSec?: number | null;
+  displayForever?: boolean;
+  fontName?: string;
+  fontColor?: string;
+  bgColor?: string;
+  uppercase?: boolean;
 }
 
 // --- Effects config ---

@@ -41,22 +41,36 @@ const HOOK_LOOKS: Record<string, HookLook> = {
   classic: { box: "rgba(18, 18, 20, 0.94)", text: "#FFFFFF", outlinePx: 0, shadow: true },
   black_white: { box: "rgba(18, 18, 20, 0.94)", text: "#FFFFFF", outlinePx: 0, shadow: true },
   dark: { box: "rgba(18, 18, 20, 0.92)", text: "#FFFFFF", outlinePx: 0, shadow: true },
-  white_card: { box: "rgba(255, 255, 255, 0.94)", text: "#000000", outlinePx: 0, shadow: true },
+  white_card: { box: "rgba(255, 255, 255, 0.96)", text: "#000000", outlinePx: 0, shadow: true },
   yellow: { box: "rgba(255, 214, 0, 0.96)", text: "#000000", outlinePx: 0, shadow: true },
   red: { box: "rgba(220, 38, 38, 0.96)", text: "#FFFFFF", outlinePx: 0, shadow: true },
+  neon: { box: "rgba(10, 25, 47, 0.95)", text: "#00F0FF", outlinePx: 0, shadow: true },
+  emerald: { box: "rgba(6, 78, 59, 0.95)", text: "#34D399", outlinePx: 0, shadow: true },
+  purple: { box: "rgba(99, 102, 241, 0.95)", text: "#FFFFFF", outlinePx: 0, shadow: true },
+  orange: { box: "rgba(234, 88, 12, 0.95)", text: "#FFFFFF", outlinePx: 0, shadow: true },
+  pill: { box: "rgba(15, 23, 42, 0.82)", text: "#F1F5F9", outlinePx: 0, shadow: true },
+  breaking_news: { box: "rgba(185, 28, 28, 0.98)", text: "#FEF08A", outlinePx: 0, shadow: true },
   outline: { box: null, text: "#FFFFFF", outlinePx: 8, shadow: false },
   outline_yellow: { box: null, text: "#FFD600", outlinePx: 8, shadow: false },
 };
 
 export const HookOverlay: React.FC<HookOverlayProps> = ({ config }) => {
-  const { fps } = useVideoConfig();
-  const displayFrames = Math.round(config.displayDurationSec * fps);
+  const { fps, durationInFrames: totalVideoFrames } = useVideoConfig();
+  const isForever = Boolean(
+    config.displayForever ||
+    !config.displayDurationSec ||
+    config.displayDurationSec <= 0 ||
+    (config.displayDurationSec * fps >= totalVideoFrames)
+  );
+  const displayFrames = isForever
+    ? totalVideoFrames
+    : Math.min(Math.round((config.displayDurationSec || 5) * fps), totalVideoFrames);
 
   return (
     <AbsoluteFill>
       <style>{notoSerifFontFace}</style>
       <Sequence from={0} durationInFrames={displayFrames} layout="none">
-        <HookBox config={config} displayFrames={displayFrames} />
+        <HookBox config={config} displayFrames={displayFrames} isForever={isForever} />
       </Sequence>
     </AbsoluteFill>
   );
@@ -65,9 +79,10 @@ export const HookOverlay: React.FC<HookOverlayProps> = ({ config }) => {
 interface HookBoxProps {
   config: HookConfig;
   displayFrames: number;
+  isForever: boolean;
 }
 
-const HookBox: React.FC<HookBoxProps> = ({ config, displayFrames }) => {
+const HookBox: React.FC<HookBoxProps> = ({ config, displayFrames, isForever }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const scale = SIZE_SCALE[config.size] ?? 1.0;
@@ -110,13 +125,15 @@ const HookBox: React.FC<HookBoxProps> = ({ config, displayFrames }) => {
       break;
   }
 
-  // Exit fade (last 15 frames)
-  const fadeOutStart = displayFrames - 15;
-  if (frame > fadeOutStart) {
-    animOpacity *= interpolate(frame, [fadeOutStart, displayFrames], [1, 0], {
-      extrapolateLeft: "clamp",
-      extrapolateRight: "clamp",
-    });
+  // Exit fade (last 15 frames) only when disappearing before video ends
+  if (!isForever) {
+    const fadeOutStart = displayFrames - 15;
+    if (frame > fadeOutStart) {
+      animOpacity *= interpolate(frame, [fadeOutStart, displayFrames], [1, 0], {
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+      });
+    }
   }
 
   const positionStyle = POSITION_STYLE[config.position] ?? POSITION_STYLE.top;
@@ -126,6 +143,10 @@ const HookBox: React.FC<HookBoxProps> = ({ config, displayFrames }) => {
   const baseFontSize = 1080 * 0.05;
   const fontSize = Math.round(baseFontSize * scale);
   const outlinePx = Math.round(look.outlinePx * scale);
+
+  const customFont = config.fontName || `'${NOTO_SERIF_FONT_FAMILY}', 'Noto Serif', Georgia, serif`;
+  const customTextColor = config.fontColor || look.text;
+  const customBgBox = config.bgColor !== undefined && config.bgColor !== '' ? config.bgColor : (look.box ?? "transparent");
 
   return (
     <div
@@ -143,21 +164,22 @@ const HookBox: React.FC<HookBoxProps> = ({ config, displayFrames }) => {
           opacity: animOpacity,
           transform: `scale(${animScale}) translateY(${animTranslateY}px)`,
           maxWidth: "90%",
-          backgroundColor: look.box ?? "transparent",
+          backgroundColor: customBgBox,
           borderRadius: 20,
-          padding: look.box ? `${25 * scale}px ${30 * scale}px` : 0,
-          boxShadow: look.shadow ? "5px 5px 15px rgba(0, 0, 0, 0.25)" : "none",
+          padding: customBgBox !== "transparent" ? `${25 * scale}px ${30 * scale}px` : 0,
+          boxShadow: look.shadow && customBgBox !== "transparent" ? "5px 5px 15px rgba(0, 0, 0, 0.25)" : "none",
           textAlign: "center",
         }}
       >
         <span
           style={{
-            fontFamily: `'${NOTO_SERIF_FONT_FAMILY}', 'Noto Serif', Georgia, serif`,
+            fontFamily: customFont,
             fontSize,
             fontWeight: 700,
-            color: look.text,
+            color: customTextColor,
             lineHeight: 1.4,
             wordBreak: "break-word",
+            textTransform: config.uppercase ? "uppercase" : "none",
             ...(outlinePx > 0
               ? {
                   WebkitTextStroke: `${outlinePx}px #000000`,

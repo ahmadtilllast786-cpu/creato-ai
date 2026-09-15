@@ -193,14 +193,28 @@ def download_font_if_needed():
 # These 6 styles are a CONTRACT with the frontend (HookModal picker and
 # HookOverlay's HOOK_LOOKS must mirror these keys exactly).
 HOOK_STYLES = {
-    # Black card, white text (User requested default: sleek high-contrast look).
+    # Black card, white text (Default: sleek high-contrast look).
     "classic": {"box": (18, 18, 20, 240),     "text": (255, 255, 255), "outline": None, "shadow": True},
     # Dark card, white text.
     "dark":    {"box": (18, 18, 20, 235),     "text": (255, 255, 255), "outline": None, "shadow": True},
-    # Bright yellow card, black text (high-contrast TikTok look).
+    # High-contrast white card, black text.
+    "white_card": {"box": (255, 255, 255, 245), "text": (0, 0, 0), "outline": None, "shadow": True},
+    # Bright yellow card, black text (high-contrast TikTok/Reels look).
     "yellow":  {"box": (255, 214, 0, 245),   "text": (0, 0, 0), "outline": None, "shadow": True},
     # Red "breaking" card, white text.
     "red":     {"box": (220, 38, 38, 245),   "text": (255, 255, 255), "outline": None, "shadow": True},
+    # Cyber neon cyan glow on dark card.
+    "neon":    {"box": (10, 25, 47, 242),     "text": (0, 240, 255), "outline": None, "shadow": True},
+    # Growth tech emerald green card.
+    "emerald": {"box": (6, 78, 59, 242),     "text": (52, 211, 153), "outline": None, "shadow": True},
+    # Violet / purple card.
+    "purple":  {"box": (99, 102, 241, 242),   "text": (255, 255, 255), "outline": None, "shadow": True},
+    # Warm sunset orange card.
+    "orange":  {"box": (234, 88, 12, 242),    "text": (255, 255, 255), "outline": None, "shadow": True},
+    # Translucent floating pill card.
+    "pill":    {"box": (15, 23, 42, 210),     "text": (241, 245, 249), "outline": None, "shadow": True},
+    # Breaking news banner (dark red with yellow text).
+    "breaking_news": {"box": (185, 28, 28, 250), "text": (254, 240, 138), "outline": None, "shadow": True},
     # No box: white text with a thick black outline (caption/MrBeast style).
     "outline": {"box": (0, 0, 0, 0),         "text": (255, 255, 255), "outline": ((0, 0, 0), 8), "shadow": False},
     # No box: yellow text with black outline.
@@ -445,7 +459,7 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
             '-i', video_path,
             '-i', img_path,
             '-filter_complex', f"[0:v][1:v]overlay={overlay_x}:{overlay_y}"
-                + (f":enable='between(t,0,{float(duration)})'" if duration else ""),
+                + (f":enable='between(t,0,{float(duration)})'" if duration and float(duration) > 0 else ""),
             '-c:a', 'copy',
             *video_encode_args(QUALITY),
             *METADATA_SCRUB,
