@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Loader2, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { Loader2, ShieldAlert, ShieldCheck, Check, RotateCcw } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 import { detectBurnedInCaptions } from '../lib/captionDetector';
 import RemotionPreview from './RemotionPreview';
 import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
 import { ActivePlaybackController } from '../lib/activePlayback';
-import InspectorActionBar from './ui/InspectorActionBar';
 
 const COLLISION_OPTIONS = [
     { value: 'smart_reposition', label: 'smart safe' },
@@ -364,11 +363,111 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
         else fallbackPositionClasses = 'bottom-[18%]';
     }
 
+    // Text edits must survive the server render path too (issue #69):
+    // send edited words whenever text differs from transcript output.
+    const textEdited = (originalCaptions.length > 0
+        && editableText.trim() !== originalCaptions.map((c) => c.text).join(' ').trim())
+        || (originalCaptions.length === 0 && editableText.trim().length > 0);
+
+    const styleOptions = {
+        position, fontSize, fontName, fontColor, borderColor, borderWidth, bgColor, bgOpacity,
+        // Karaoke burn (server-side ASS render)
+        style, effect, baseOpacity, uppercase, highlightColor,
+        // Collision avoidance & safe zones
+        hasBurnedInCaptions,
+        collisionMode,
+        manualYOffset,
+        clearPreviousSubtitles: true,
+        // Remotion data
+        remotion: useRemotionPreview ? subtitleConfig : null,
+        captions: textEdited ? captions : (captions.length > 0 ? captions : null),
+    };
+
+    const bulkRunning = bulkProgress?.running;
+
+    const modalFooter = (
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 w-full">
+            <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
+                    <span
+                        className={`w-2.5 h-2.5 rounded-full transition-colors ${
+                            isDirty || textEdited ? 'bg-warn animate-pulse' : 'bg-ok/70'
+                        }`}
+                    />
+                    <span className="text-xs font-mono lowercase text-muted">
+                        {isDirty || textEdited ? 'staged caption changes pending' : 'captions applied'}
+                    </span>
+                </div>
+                {onRemove && (
+                    <button
+                        type="button"
+                        onClick={onRemove}
+                        disabled={isProcessing}
+                        className="text-xs text-muted hover:text-warn transition-colors underline underline-offset-2 lowercase disabled:opacity-50 ml-2 cursor-pointer"
+                        title="Remove burned captions from this clip"
+                    >
+                        remove captions
+                    </button>
+                )}
+            </div>
+
+            <div className="flex items-center gap-2.5 shrink-0">
+                {onApplyAll && bulkCount > 1 && (
+                    <button
+                        type="button"
+                        onClick={() => onApplyAll({ ...styleOptions, captions: null })}
+                        disabled={isProcessing}
+                        className="btn-ghost py-2 px-3 text-xs flex items-center gap-1.5 cursor-pointer"
+                    >
+                        {bulkRunning ? (
+                            <><Loader2 size={13} className="animate-spin" /> applying to all… {bulkProgress.current}/{bulkProgress.total}</>
+                        ) : (
+                            `apply this style to all ${bulkCount} clips`
+                        )}
+                    </button>
+                )}
+                <button
+                    type="button"
+                    onClick={handleCancel}
+                    disabled={isProcessing}
+                    className="btn-ghost py-2 px-4 text-xs font-medium flex items-center gap-1.5 hover:text-warn transition-colors cursor-pointer"
+                    title="Discard staged changes and restore previous settings"
+                >
+                    <RotateCcw size={13} />
+                    <span>Cancel</span>
+                </button>
+                <button
+                    type="button"
+                    onClick={() => onGenerate(styleOptions)}
+                    disabled={isProcessing}
+                    className={`btn-primary py-2 px-5 text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                        isDirty || textEdited
+                            ? 'ring-2 ring-brass shadow-md opacity-100'
+                            : 'opacity-90 hover:opacity-100'
+                    }`}
+                    title="Apply new subtitles to this clip (replaces previous subtitles)"
+                >
+                    {isProcessing && !bulkRunning ? (
+                        <>
+                            <Loader2 size={14} className="animate-spin text-brassink" />
+                            <span>Applying Captions…</span>
+                        </>
+                    ) : (
+                        <>
+                            <Check size={14} />
+                            <span>Apply Captions</span>
+                        </>
+                    )}
+                </button>
+            </div>
+        </div>
+    );
+
     return (
-        <Modal isOpen={isOpen} onClose={onClose} size="xl" eyebrow="EDITOR · SUBTITLES" title="subtitles">
+        <Modal isOpen={isOpen} onClose={handleCancel} size="xl" eyebrow="EDITOR · SUBTITLES" title="subtitles" footer={modalFooter}>
             <div className="flex flex-col md:flex-row gap-6">
                 {/* Left: Preview */}
-                <div className="flex-1 flex flex-col items-center justify-center bg-black rounded-card border border-rule overflow-hidden relative aspect-[9/16] max-h-[600px]">
+                <div className="flex-1 flex flex-col items-center justify-center bg-black rounded-card border border-rule overflow-hidden relative aspect-[9/16] max-h-[580px]">
                     {captionsLoading ? (
                         <div className="flex items-center gap-2 text-muted">
                             <Loader2 size={16} className="animate-spin" />
@@ -397,8 +496,8 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                 </div>
 
                 {/* Right: Controls */}
-                <div className="w-full md:w-80 flex flex-col">
-                    <div className="space-y-5 flex-1 overflow-y-auto custom-scrollbar pr-1">
+                <div className="w-full md:w-80 flex flex-col max-h-[580px]">
+                    <div className="space-y-5 flex-1 overflow-y-auto custom-scrollbar pr-1 pb-2">
                         {/* Caption presets (server-side karaoke burn) */}
                         <div>
                             <p className="eyebrow mb-2">Preset</p>
@@ -669,67 +768,6 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                 </div>
                             )}
                         </div>
-                    </div>
-
-                    <div className="mt-5 shrink-0 space-y-2">
-                        {(() => {
-                            // Text edits must survive the server render path too
-                            // (issue #69): send the edited words whenever the text
-                            // differs from what the transcript produced.
-                            const textEdited = (originalCaptions.length > 0
-                                && editableText.trim() !== originalCaptions.map((c) => c.text).join(' ').trim())
-                                || (originalCaptions.length === 0 && editableText.trim().length > 0);
-                            const styleOptions = {
-                                position, fontSize, fontName, fontColor, borderColor, borderWidth, bgColor, bgOpacity,
-                                // Karaoke burn (server-side ASS render)
-                                style, effect, baseOpacity, uppercase, highlightColor,
-                                // Collision avoidance & safe zones
-                                hasBurnedInCaptions,
-                                collisionMode,
-                                manualYOffset,
-                                clearPreviousSubtitles: true,
-                                // Remotion data
-                                remotion: useRemotionPreview ? subtitleConfig : null,
-                                captions: textEdited ? captions : (captions.length > 0 ? captions : null),
-                            };
-                            const bulkRunning = bulkProgress?.running;
-                            return (
-                                <>
-                                    <InspectorActionBar
-                                        isDirty={isDirty || textEdited}
-                                        isApplying={isProcessing && !bulkRunning}
-                                        applyLabel={isProcessing && !bulkRunning ? 'applying captions…' : 'apply captions'}
-                                        cancelLabel="cancel"
-                                        onApply={() => onGenerate(styleOptions)}
-                                        onCancel={handleCancel}
-                                        description={isDirty || textEdited ? 'staged caption edits' : 'captions applied'}
-                                    />
-                                    {onApplyAll && bulkCount > 1 && (
-                                        <button
-                                            onClick={() => onApplyAll({ ...styleOptions, captions: null })}
-                                            disabled={isProcessing}
-                                            className="btn-ghost w-full flex items-center justify-center gap-2"
-                                        >
-                                            {bulkRunning
-                                                ? <><Loader2 size={16} className="animate-spin" />applying to all… {bulkProgress.current}/{bulkProgress.total}</>
-                                                : `apply this style to all ${bulkCount} clips`}
-                                        </button>
-                                    )}
-                                    {/* Clips ship captioned by default, so the way
-                                        out has to be here — otherwise a user who
-                                        doesn't want captions is stuck with them. */}
-                                    {onRemove && (
-                                        <button
-                                            onClick={onRemove}
-                                            disabled={isProcessing}
-                                            className="text-xs text-muted underline underline-offset-2 lowercase hover:text-ink2 disabled:opacity-50"
-                                        >
-                                            remove captions from this clip
-                                        </button>
-                                    )}
-                                </>
-                            );
-                        })()}
                     </div>
                 </div>
             </div>

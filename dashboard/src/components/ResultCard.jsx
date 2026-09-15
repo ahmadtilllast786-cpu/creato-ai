@@ -52,12 +52,20 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     const rawVideoUrl = typeof clip?.video_url === 'string' ? clip.video_url : '';
     const stripBurns = (filename) => {
         let f = filename || '', prev;
-        do { prev = f; f = f.replace(/^subtitled_\d+_/, '').replace(/^hooked_\d+_/, '').replace(/^hook_/, ''); } while (f !== prev);
+        do {
+            prev = f;
+            f = f.replace(/(?:^|_)subtitled_\d+_/g, (m) => m.startsWith('_') ? '_' : '')
+                 .replace(/(?:^|_)hooked_\d+_/g, (m) => m.startsWith('_') ? '_' : '')
+                 .replace(/(?:^|_)hook_/g, (m) => m.startsWith('_') ? '_' : '');
+        } while (f !== prev);
         return f;
     };
     const stripSubtitlesOnly = (filename) => {
         let f = filename || '', prev;
-        do { prev = f; f = f.replace(/^subtitled_\d+_/, ''); } while (f !== prev);
+        do {
+            prev = f;
+            f = f.replace(/(?:^|_)subtitled_\d+_/g, (m) => m.startsWith('_') ? '_' : '');
+        } while (f !== prev);
         return f;
     };
     const originalVideoUrl = rawVideoUrl ? getApiUrl(rawVideoUrl.replace(/[^/]+$/, stripBurns(rawVideoUrl.split('/').pop()))) : '';

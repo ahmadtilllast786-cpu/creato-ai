@@ -538,10 +538,13 @@ def _strip_burned_captions(output_dir, filename):
         if not m:
             break
         target = m.group(1)
-        if os.path.exists(os.path.join(output_dir, target)):
-            filename = target
-        else:
-            filename = target
+        filename = target
+
+    if "subtitled_" in filename:
+        stripped = re.sub(r'(?:^|_)subtitled_\d+_', lambda m: '_' if m.group(0).startswith('_') else '', filename)
+        if os.path.exists(os.path.join(output_dir, stripped)):
+            filename = stripped
+
     return filename
 
 
@@ -553,8 +556,15 @@ def _strip_burned_hook(output_dir, filename):
     while True:
         m = re.match(r'^(?:hooked_\d+_|hook_)(.+)$', filename)
         if not m or not os.path.exists(os.path.join(output_dir, m.group(1))):
-            return filename
+            break
         filename = m.group(1)
+
+    if "hooked_" in filename or "hook_" in filename:
+        stripped = re.sub(r'(?:^|_)(?:hooked_\d+_|hook_)', lambda m: '_' if m.group(0).startswith('_') else '', filename)
+        if os.path.exists(os.path.join(output_dir, stripped)):
+            filename = stripped
+
+    return filename
 
 
 def _strip_auto_edited(output_dir, filename):
@@ -4744,18 +4754,31 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
     # Re-subtitling must replace previous subtitles instead of burning over them.
     clean_target = _strip_burned_captions(output_dir, filename)
 
-    # If the clean target still has subtitles in the name (e.g. hooked_<ts>_subtitled_<ts>_<base>),
-    # or if input_path doesn't exist, resolve to the base cut and re-hook if needed:
+    base_clean = get_base_cut_filename(output_dir, filename)
+    hook_meta = clip_data.get('auto_hook')
+
+    # If clean_target still carries subtitles or is missing on disk, fallback to base cut:
     if "subtitled_" in clean_target or not os.path.exists(os.path.join(output_dir, clean_target)):
-        base_clean = get_base_cut_filename(output_dir, filename)
         if os.path.exists(os.path.join(output_dir, base_clean)):
-            # Check if there was an active hook on this clip that should be maintained under captions
-            hook_meta = clip_data.get('auto_hook')
-            if hook_meta and hook_meta.get('text'):
+            clean_target = base_clean
+
+    # If this clip has an active viral hook, ensure clean_target carries that hook cleanly
+    # without any burned subtitles:
+    if hook_meta and hook_meta.get('text'):
+        is_hooked = (clean_target.startswith('hooked_') or clean_target.startswith('hook_')) and "subtitled_" not in clean_target and os.path.exists(os.path.join(output_dir, clean_target))
+        if not is_hooked:
+            hook_candidates = glob.glob(os.path.join(output_dir, f"hooked_*_{base_clean}"))
+            clean_hook_candidates = [c for c in hook_candidates if "subtitled_" not in os.path.basename(c)]
+            if clean_hook_candidates:
+                clean_target = os.path.basename(max(clean_hook_candidates, key=os.path.getmtime))
+            elif os.path.exists(os.path.join(output_dir, base_clean)):
                 hook_only_name = f"hooked_{int(time.time())}_{base_clean}"
                 hook_only_path = os.path.join(output_dir, hook_only_name)
                 size_map = {"S": 0.8, "M": 1.0, "L": 1.3}
                 font_scale = size_map.get(hook_meta.get('size', 'M'), 1.0)
+                duration = hook_meta.get('duration_seconds')
+                if duration is not None and duration <= 0:
+                    duration = None
                 try:
                     add_hook_to_video(
                         os.path.join(output_dir, base_clean),
@@ -4763,15 +4786,15 @@ async def add_subtitles(req: SubtitleRequest, request: Request):
                         hook_only_path,
                         position=hook_meta.get('position', 'top'),
                         font_scale=font_scale,
-                        duration=hook_meta.get('duration_seconds'),
+                        duration=duration,
                         style=hook_meta.get('style', 'classic')
                     )
                     clean_target = hook_only_name
                 except Exception as e:
                     print(f"⚠️ Could not re-burn hook under new subtitles: {e}")
                     clean_target = base_clean
-            else:
-                clean_target = base_clean
+    elif not os.path.exists(os.path.join(output_dir, clean_target)) and os.path.exists(os.path.join(output_dir, base_clean)):
+        clean_target = base_clean
 
     filename = clean_target
     input_path = os.path.join(output_dir, filename)
@@ -4948,16 +4971,15 @@ async def remove_subtitles(req: RemoveSubtitlesRequest, request: Request):
         or f"{os.path.basename(target_json).replace('_metadata.json', '')}"
            f"_clip_{req.clip_index + 1}.mp4")
 
-    # Same walk-back the burn path uses, so this undoes any number of restyles.
-    while True:
-        m = re.match(r'^subtitled_\d+_(.+)$', filename)
-        if not m or not os.path.exists(os.path.join(output_dir, m.group(1))):
-            break
-        filename = m.group(1)
-
-    if not os.path.exists(os.path.join(output_dir, filename)):
-        raise HTTPException(status_code=404,
-                            detail="The original clip is no longer available.")
+    clean_target = _strip_burned_captions(output_dir, filename)
+    if not os.path.exists(os.path.join(output_dir, clean_target)):
+        base_clean = get_base_cut_filename(output_dir, filename)
+        if os.path.exists(os.path.join(output_dir, base_clean)):
+            clean_target = base_clean
+        else:
+            raise HTTPException(status_code=404,
+                                detail="The original clip is no longer available.")
+    filename = clean_target
 
     new_url = f"/videos/{req.job_id}/{filename}"
     if req.clip_index < len(job.get('result', {}).get('clips', [])):
