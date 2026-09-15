@@ -21,9 +21,9 @@ const SIZE_SCALE: Record<string, number> = {
 };
 
 const POSITION_STYLE: Record<string, React.CSSProperties> = {
-  top: { top: "18%", bottom: "auto" },
+  top: { top: "7%", bottom: "auto" },
   center: { top: "50%", bottom: "auto", transform: "translateY(-50%)" },
-  bottom: { top: "68%", bottom: "auto" },
+  bottom: { top: "78%", bottom: "auto" },
 };
 
 // Must mirror hooks.py HOOK_STYLES so preview == burned output.
@@ -55,8 +55,16 @@ const textStroke = (px: number, color: string): string => {
 };
 
 export const HookOverlay: React.FC<HookOverlayProps> = ({ config }) => {
-  const { fps } = useVideoConfig();
-  const displayFrames = Math.round(config.displayDurationSec * fps);
+  const { fps, durationInFrames: totalVideoFrames } = useVideoConfig();
+  const isForever = Boolean(
+    config.displayForever !== false ||
+    !config.displayDurationSec ||
+    config.displayDurationSec <= 0 ||
+    (config.displayDurationSec * fps >= totalVideoFrames)
+  );
+  const displayFrames = isForever
+    ? totalVideoFrames
+    : Math.min(Math.round((config.displayDurationSec || 5) * fps), totalVideoFrames);
 
   return (
     <AbsoluteFill>

@@ -169,6 +169,9 @@ const ProcessingAnimation = ({ media, isComplete, syncedTime, isSyncedPlaying, s
             muted
             loop
             playsInline
+            data-ignore-playback-control="true"
+            data-companion="true"
+            data-ambient="true"
             onError={(e) => {
               console.warn("Processing preview video failed to load, falling back to spinner:", e);
               setVideoSrc(null);

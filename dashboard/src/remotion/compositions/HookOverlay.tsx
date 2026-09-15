@@ -21,12 +21,12 @@ const SIZE_SCALE: Record<string, number> = {
 };
 
 // Permanent Viral Hook Positioning: Anchor the initial hook headline permanently
-// in the dedicated safe margin above the 9:16 frame (Y: ~2%), so it never overlays
+// in the dedicated safe margin strictly within the top safe zone (Y: 5%–12%), so it never overlays
 // speaker faces, eyes, or lower subtitles.
 const POSITION_STYLE: Record<string, React.CSSProperties> = {
-  top: { top: "2%", bottom: "auto" },
+  top: { top: "7%", bottom: "auto" },
   center: { top: "50%", bottom: "auto", transform: "translateY(-50%)" },
-  bottom: { top: "70%", bottom: "auto" },
+  bottom: { top: "78%", bottom: "auto" },
 };
 
 // Must mirror hooks.py HOOK_STYLES (the server-side FFmpeg fallback).
@@ -57,7 +57,7 @@ const HOOK_LOOKS: Record<string, HookLook> = {
 export const HookOverlay: React.FC<HookOverlayProps> = ({ config }) => {
   const { fps, durationInFrames: totalVideoFrames } = useVideoConfig();
   const isForever = Boolean(
-    config.displayForever ||
+    config.displayForever !== false ||
     !config.displayDurationSec ||
     config.displayDurationSec <= 0 ||
     (config.displayDurationSec * fps >= totalVideoFrames)

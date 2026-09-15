@@ -437,12 +437,12 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
         overlay_x = (video_width - box_w) // 2
         
         # Permanent Viral Hook Positioning: Anchor the initial hook headline permanently
-        # in the dedicated safe margin above the 9:16 frame (Y: ~3%), so it never overlays
+        # in the dedicated safe margin strictly within the top safe zone (Y: 5%–12%), so it never overlays
         # speaker faces or lower subtitles.
         POSITION_MAP = {
-            "top": int(video_height * 0.03),
+            "top": int(video_height * 0.07),
             "center": (video_height - box_h) // 2,
-            "bottom": int(video_height * 0.8),
+            "bottom": int(video_height * 0.78),
         }
 
         if position not in POSITION_MAP:

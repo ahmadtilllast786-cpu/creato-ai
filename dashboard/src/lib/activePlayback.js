@@ -31,6 +31,23 @@ class ActivePlaybackManager {
             (event) => {
                 const target = event.target;
                 if (target && (target.tagName === 'VIDEO' || target.tagName === 'AUDIO')) {
+                    // Ignore background, ambient, or companion sync media (e.g. ProcessingAnimation preview)
+                    if (
+                        target.dataset?.ignorePlaybackControl === 'true' ||
+                        target.dataset?.ambient === 'true' ||
+                        target.dataset?.companion === 'true' ||
+                        target.hasAttribute('data-ambient') ||
+                        target.hasAttribute('data-companion') ||
+                        target.hasAttribute('data-ignore-playback-control')
+                    ) {
+                        return;
+                    }
+
+                    // Also ignore muted non-controlled videos without playerId (e.g. ambient background loops)
+                    if (target.muted && !target.hasAttribute('controls') && !target.dataset?.playerId) {
+                        return;
+                    }
+
                     const id = target.dataset?.playerId || target.id || `dom-media-${Math.random().toString(36).slice(2, 8)}`;
                     this.claimPlayback(id, { element: target });
                 }
@@ -102,6 +119,16 @@ class ActivePlaybackManager {
             const allMedia = document.querySelectorAll('video, audio');
             allMedia.forEach((media) => {
                 if (media !== element && !media.paused) {
+                    if (
+                        media.dataset?.ignorePlaybackControl === 'true' ||
+                        media.dataset?.ambient === 'true' ||
+                        media.dataset?.companion === 'true' ||
+                        media.hasAttribute('data-ambient') ||
+                        media.hasAttribute('data-companion') ||
+                        media.hasAttribute('data-ignore-playback-control')
+                    ) {
+                        return;
+                    }
                     try {
                         media.pause();
                         media.muted = true;

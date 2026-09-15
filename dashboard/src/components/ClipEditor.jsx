@@ -145,21 +145,127 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
     const [activeInspectorTab, setActiveInspectorTab] = useState('cuts');
 
     // ─── Transactional Feature Inspectors State Buffers ─────────────
-    // 1. Captions Inspector Staging Buffer
-    const initialCaptions = useMemo(() => ({
+    // 1. Captions Inspector Staging Buffer (Two-Tier Staging State Pattern)
+    const initialCaptionStyle = useMemo(() => ({
         style: 'karaoke',
+        presetId: 'tiktok',
         fontName: 'Verdana',
-        fontSize: 48,
-        highlightColor: '#FFD700',
+        fontSize: 44,
+        highlightColor: '#FE2C55',
         fontColor: '#FFFFFF',
         borderColor: '#000000',
         borderWidth: 2,
-        position: 'bottom', // Safe margin bottom
+        position: 'bottom', // Safe margin bottom Y: 75%-85%
         uppercase: false,
         animation: 'pop',
     }), []);
-    const [appliedCaptions, setAppliedCaptions] = useState(initialCaptions);
-    const [draftCaptions, setDraftCaptions] = useState(initialCaptions);
+
+    // appliedStyle: Snapshot of active subtitle styling on timeline
+    const [appliedStyle, setAppliedStyle] = useState(initialCaptionStyle);
+    // draftStyle: Local state copy reflecting user edits inside panel
+    const [draftStyle, setDraftStyle] = useState(initialCaptionStyle);
+
+    // Global timeline caption track state
+    const [captionsTrack, setCaptionsTrack] = useState({
+        enabled: true,
+        style: initialCaptionStyle,
+    });
+
+    const isCaptionsDirty = useMemo(
+        () => JSON.stringify(draftStyle) !== JSON.stringify(appliedStyle),
+        [draftStyle, appliedStyle]
+    );
+
+    const handleApplyCaptions = (newStyle = draftStyle) => {
+        // Deep-merge draftStyle into global timeline caption track state
+        setCaptionsTrack(prev => ({
+            ...prev,
+            style: { ...prev.style, ...newStyle },
+        }));
+        // Update appliedStyle snapshot
+        setAppliedStyle({ ...newStyle });
+        setReapplyCaptions(true);
+    };
+
+    const handleCancelCaptions = () => {
+        // Reset draftStyle to appliedStyle snapshot
+        setDraftStyle({ ...appliedStyle });
+    };
+
+    // Backward compatibility aliases
+    const draftCaptions = draftStyle;
+    const setDraftCaptions = setDraftStyle;
+    const appliedCaptions = appliedStyle;
+    const setAppliedCaptions = setAppliedStyle;
+
+    // ─── Viral Hook Persistence: Full-Video Duration & Separate Layer ───
+    const hookTitleText = clipTitle || edl?.title || "POV: VIRAL MOMENT";
+    const hookOverlayTrack = useMemo(() => {
+        const totalDuration = totalOf(segments) || (edl?.duration ?? 30);
+        return {
+            id: "viral-hook-title",
+            type: "static-hook",
+            startTime: 0,
+            endTime: totalDuration, // Automatically locked to total video duration across timeline
+            text: hookTitleText,
+            position: "top", // Anchored strictly in top safe margin (Y: 5%-12%)
+            safeZoneY: "7%",
+            style: "classic",
+        };
+    }, [segments, edl?.duration, hookTitleText]);
+
+    // Live active style for preview canvas: draftStyle when on captions tab, appliedStyle otherwise
+    const activePreviewSubtitleStyle = activeInspectorTab === 'captions'
+        ? draftStyle
+        : captionsTrack.style;
+
+    // Dynamic spoken words at current playhead for timeline preview
+    const currentSpokenSubtitle = useMemo(() => {
+        let acc = 0;
+        let srcTime = null;
+        for (const s of segments) {
+            const len = s.end - s.start;
+            if (playhead >= acc - 0.05 && playhead <= acc + len + 0.05) {
+                srcTime = s.start + Math.max(0, Math.min(len, playhead - acc));
+                break;
+            }
+            acc += len;
+        }
+        if (srcTime === null && segments.length > 0) {
+            srcTime = segments[0].start;
+        }
+
+        if (words && words.length > 0 && srcTime !== null) {
+            const activeIdx = words.findIndex((w) => w.s <= srcTime && w.e >= srcTime);
+            if (activeIdx !== -1) {
+                const startIdx = Math.max(0, activeIdx - 1);
+                const endIdx = Math.min(words.length, activeIdx + 3);
+                return {
+                    hasSpeech: true,
+                    activeWord: words[activeIdx].w,
+                    prefix: words.slice(startIdx, activeIdx).map(w => w.w).join(' '),
+                    suffix: words.slice(activeIdx + 1, endIdx).map(w => w.w).join(' '),
+                };
+            }
+            const past = words.filter(w => w.e <= srcTime);
+            if (past.length > 0 && srcTime - past[past.length - 1].e < 1.2) {
+                const last = past[past.length - 1];
+                return {
+                    hasSpeech: true,
+                    activeWord: last.w,
+                    prefix: '',
+                    suffix: '',
+                };
+            }
+        }
+
+        return {
+            hasSpeech: false,
+            activeWord: "Captions",
+            prefix: "Live",
+            suffix: "Preview",
+        };
+    }, [playhead, segments, words]);
 
     // 2. Effects & Filters Inspector Staging Buffer
     const initialEffects = useMemo(() => ({
@@ -186,10 +292,6 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
     const [appliedAudio, setAppliedAudio] = useState(initialAudio);
     const [draftAudio, setDraftAudio] = useState(initialAudio);
 
-    const isCaptionsDirty = useMemo(
-        () => JSON.stringify(draftCaptions) !== JSON.stringify(appliedCaptions),
-        [draftCaptions, appliedCaptions]
-    );
     const isEffectsDirty = useMemo(
         () => JSON.stringify(draftEffects) !== JSON.stringify(appliedEffects),
         [draftEffects, appliedEffects]
@@ -1454,28 +1556,54 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                                 onPlay={onClipPlay}
                                 onPause={stopPlayLoop}
                             />
-                            {/* Real-time Staged Captions Preview Overlay in Bottom Safe Margin Zone (Y: ~75%-85%) */}
-                            {activeInspectorTab === 'captions' && (
-                                <div className="absolute inset-x-0 bottom-[18%] px-6 text-center pointer-events-none flex flex-col items-center justify-center animate-fade">
-                                    <span
-                                        style={{
-                                            fontFamily: draftCaptions.fontName || 'Verdana',
-                                            fontSize: `${Math.round(draftCaptions.fontSize * 0.38)}px`,
-                                            color: draftCaptions.fontColor || '#FFFFFF',
-                                            backgroundColor: 'rgba(0, 0, 0, 0.65)',
-                                            padding: '4px 12px',
-                                            borderRadius: '8px',
-                                            fontWeight: 700,
-                                            textTransform: draftCaptions.uppercase ? 'uppercase' : 'none',
-                                            WebkitTextStroke: `${draftCaptions.borderWidth || 2}px ${draftCaptions.borderColor || '#000000'}`,
-                                            paintOrder: 'stroke fill',
-                                            boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-                                        }}
-                                    >
-                                        Live Staged <span style={{ color: draftCaptions.highlightColor || '#FFD700' }}>Captions</span> Preview
-                                    </span>
+                            {/* Persistent Viral Hook Overlay Layer: Full video duration, top safe margin Y: 5%-12% */}
+                            {hookOverlayTrack && (
+                                <div
+                                    className="absolute inset-x-0 top-[7%] px-4 z-20 pointer-events-none flex justify-center text-center transition-all select-none"
+                                    style={{ zIndex: 20 }}
+                                >
+                                    <div className="max-w-[90%] bg-black/85 backdrop-blur-sm px-3.5 py-1.5 rounded-xl border border-white/20 shadow-xl text-center">
+                                        <span
+                                            className="font-serif font-bold text-white text-[12px] sm:text-xs tracking-wide leading-tight line-clamp-2 uppercase"
+                                            style={{
+                                                textShadow: '0 2px 6px rgba(0,0,0,0.9)',
+                                            }}
+                                        >
+                                            {hookOverlayTrack.text}
+                                        </span>
+                                    </div>
                                 </div>
                             )}
+
+                            {/* Dynamic Spoken Transcript Subtitles (Bottom Safe Margin Zone Y: ~75%-85%) */}
+                            <div
+                                className="absolute inset-x-0 bottom-[16%] px-6 text-center pointer-events-none flex flex-col items-center justify-center transition-all z-20 select-none animate-fade"
+                                style={{ zIndex: 20 }}
+                            >
+                                <span
+                                    style={{
+                                        fontFamily: activePreviewSubtitleStyle.fontName || 'Verdana',
+                                        fontSize: `${Math.round((activePreviewSubtitleStyle.fontSize || 44) * 0.38)}px`,
+                                        color: activePreviewSubtitleStyle.fontColor || '#FFFFFF',
+                                        backgroundColor: 'rgba(0, 0, 0, 0.72)',
+                                        padding: '4px 12px',
+                                        borderRadius: '8px',
+                                        fontWeight: 700,
+                                        textTransform: activePreviewSubtitleStyle.uppercase ? 'uppercase' : 'none',
+                                        WebkitTextStroke: `${activePreviewSubtitleStyle.borderWidth || 2}px ${activePreviewSubtitleStyle.borderColor || '#000000'}`,
+                                        paintOrder: 'stroke fill',
+                                        boxShadow: '0 4px 12px rgba(0,0,0,0.6)',
+                                        display: 'inline-block',
+                                        lineHeight: 1.3,
+                                    }}
+                                >
+                                    {currentSpokenSubtitle.prefix ? `${currentSpokenSubtitle.prefix} ` : ''}
+                                    <span style={{ color: activePreviewSubtitleStyle.highlightColor || '#FFD700' }}>
+                                        {currentSpokenSubtitle.activeWord}
+                                    </span>
+                                    {currentSpokenSubtitle.suffix ? ` ${currentSpokenSubtitle.suffix}` : ''}
+                                </span>
+                            </div>
                         </div>
                     </div>
 
@@ -1733,33 +1861,38 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
 
                         {/* ─── TAB 2: CAPTIONS INSPECTOR ─── */}
                         {activeInspectorTab === 'captions' && (
-                            <div className="space-y-4">
+                            <div className="space-y-4 relative z-20 pointer-events-auto">
                                 <div>
                                     <p className="eyebrow mb-1.5">Caption Preset</p>
                                     <div className="grid grid-cols-2 gap-1.5">
                                         {[
-                                            { id: 'tiktok', label: 'TikTok Glow', highlight: '#FE2C55', font: 'Verdana' },
-                                            { id: 'shorts', label: 'Shorts Pop', highlight: '#FF0000', font: 'Impact' },
-                                            { id: 'gold', label: 'Gold Authority', highlight: '#FFD700', font: 'Montserrat' },
-                                            { id: 'neon', label: 'Cyber Neon', highlight: '#00FF88', font: 'Verdana' },
+                                            { id: 'tiktok', label: 'TikTok Glow', highlight: '#FE2C55', font: 'Verdana', uppercase: false, borderWidth: 2 },
+                                            { id: 'shorts', label: 'Shorts Pop', highlight: '#FF0000', font: 'Impact', uppercase: false, borderWidth: 2 },
+                                            { id: 'gold', label: 'Gold Authority', highlight: '#FFD700', font: 'Verdana', uppercase: false, borderWidth: 2 },
+                                            { id: 'neon', label: 'Cyber Neon', highlight: '#00FF88', font: 'Verdana', uppercase: false, borderWidth: 2 },
+                                            { id: 'classic', label: 'Classic Clean', highlight: '#FFFFFF', font: 'Verdana', uppercase: false, borderWidth: 2 },
+                                            { id: 'beast', label: 'Beast Mode', highlight: '#FFD700', font: 'Impact', uppercase: true, borderWidth: 3 },
                                         ].map((preset) => (
                                             <button
                                                 key={preset.id}
                                                 type="button"
-                                                onClick={() => setDraftCaptions(prev => ({
+                                                onClick={() => setDraftStyle(prev => ({
                                                     ...prev,
+                                                    presetId: preset.id,
                                                     style: 'karaoke',
                                                     fontName: preset.font,
                                                     highlightColor: preset.highlight,
+                                                    uppercase: preset.uppercase,
+                                                    borderWidth: preset.borderWidth,
                                                 }))}
-                                                className={`p-2 rounded-input border text-xs text-left transition-colors flex items-center justify-between ${
-                                                    draftCaptions.highlightColor === preset.highlight
-                                                        ? 'border-[color:var(--color-accent)] bg-paper3'
+                                                className={`p-2 rounded-input border text-xs text-left transition-colors flex items-center justify-between cursor-pointer ${
+                                                    draftStyle.highlightColor === preset.highlight && draftStyle.fontName === preset.font
+                                                        ? 'border-[color:var(--color-accent)] bg-paper3 ring-1 ring-[color:var(--color-accent)]'
                                                         : 'border-rule hover:bg-paper3 text-muted'
                                                 }`}
                                             >
                                                 <span className="font-semibold text-ink">{preset.label}</span>
-                                                <span className="w-3 h-3 rounded-full" style={{ background: preset.highlight }} />
+                                                <span className="w-3 h-3 rounded-full shrink-0 shadow-sm" style={{ background: preset.highlight }} />
                                             </button>
                                         ))}
                                     </div>
@@ -1768,9 +1901,9 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                                 <div>
                                     <p className="eyebrow mb-1.5">Font Family</p>
                                     <select
-                                        value={draftCaptions.fontName}
-                                        onChange={(e) => setDraftCaptions(prev => ({ ...prev, fontName: e.target.value }))}
-                                        className="input-field w-full py-1.5 px-2 text-xs"
+                                        value={draftStyle.fontName}
+                                        onChange={(e) => setDraftStyle(prev => ({ ...prev, fontName: e.target.value }))}
+                                        className="input-field w-full py-1.5 px-2 text-xs cursor-pointer"
                                     >
                                         <option value="Verdana">Verdana (Clean Sans)</option>
                                         <option value="Impact">Impact (Heavy Viral)</option>
@@ -1783,16 +1916,51 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                                 <div>
                                     <div className="flex justify-between mb-1">
                                         <p className="eyebrow">Font Size</p>
-                                        <span className="readout">{draftCaptions.fontSize}px</span>
+                                        <span className="readout">{draftStyle.fontSize}px</span>
                                     </div>
                                     <input
                                         type="range"
                                         min="28"
                                         max="64"
-                                        value={draftCaptions.fontSize}
-                                        onChange={(e) => setDraftCaptions(prev => ({ ...prev, fontSize: parseInt(e.target.value) }))}
-                                        className="w-full accent-[var(--color-accent)]"
+                                        value={draftStyle.fontSize}
+                                        onChange={(e) => setDraftStyle(prev => ({ ...prev, fontSize: parseInt(e.target.value) }))}
+                                        className="w-full accent-[var(--color-accent)] cursor-pointer"
                                     />
+                                </div>
+
+                                <div>
+                                    <div className="flex justify-between mb-1">
+                                        <p className="eyebrow">Outline / Stroke</p>
+                                        <span className="readout">{draftStyle.borderWidth}px</span>
+                                    </div>
+                                    <input
+                                        type="range"
+                                        min="0"
+                                        max="6"
+                                        value={draftStyle.borderWidth}
+                                        onChange={(e) => setDraftStyle(prev => ({ ...prev, borderWidth: parseInt(e.target.value) }))}
+                                        className="w-full accent-[var(--color-accent)] cursor-pointer"
+                                    />
+                                </div>
+
+                                <div>
+                                    <div className="flex items-center justify-between">
+                                        <div>
+                                            <p className="eyebrow">Uppercase Text</p>
+                                            <p className="text-[11px] text-muted">Capitalize all spoken caption text</p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => setDraftStyle(prev => ({ ...prev, uppercase: !prev.uppercase }))}
+                                            className={`px-3 py-1 rounded-input border text-xs font-mono transition-colors cursor-pointer ${
+                                                draftStyle.uppercase
+                                                    ? 'border-[color:var(--color-accent)] bg-paper3 text-ink font-bold'
+                                                    : 'border-rule text-muted hover:text-ink'
+                                            }`}
+                                        >
+                                            {draftStyle.uppercase ? 'ON' : 'OFF'}
+                                        </button>
+                                    </div>
                                 </div>
 
                                 <div>
@@ -1806,10 +1974,10 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                                             <button
                                                 key={pos.id}
                                                 type="button"
-                                                onClick={() => setDraftCaptions(prev => ({ ...prev, position: pos.id }))}
-                                                className={`py-1.5 px-1.5 rounded-input border text-xs lowercase transition-colors ${
-                                                    draftCaptions.position === pos.id
-                                                        ? 'border-[color:var(--color-accent)] text-ink'
+                                                onClick={() => setDraftStyle(prev => ({ ...prev, position: pos.id }))}
+                                                className={`py-1.5 px-1.5 rounded-input border text-xs lowercase transition-colors cursor-pointer ${
+                                                    draftStyle.position === pos.id
+                                                        ? 'border-[color:var(--color-accent)] text-ink bg-paper3 font-medium'
                                                         : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'
                                                 }`}
                                             >
@@ -1826,12 +1994,9 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                                     isDirty={isCaptionsDirty}
                                     applyLabel="Apply Captions"
                                     cancelLabel="Discard"
-                                    onApply={() => {
-                                        setAppliedCaptions({ ...draftCaptions });
-                                        setReapplyCaptions(true);
-                                    }}
-                                    onCancel={() => setDraftCaptions({ ...appliedCaptions })}
-                                    description={isCaptionsDirty ? 'staged caption styling' : 'captions committed'}
+                                    onApply={() => handleApplyCaptions(draftStyle)}
+                                    onCancel={handleCancelCaptions}
+                                    description={isCaptionsDirty ? 'staged caption styling pending' : 'captions committed to timeline'}
                                 />
                             </div>
                         )}

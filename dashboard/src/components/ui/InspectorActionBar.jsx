@@ -27,7 +27,7 @@ export default function InspectorActionBar({
     description = '',
 }) {
     return (
-        <div className={`pt-3 mt-3 border-t border-rule flex flex-col gap-2 ${className}`}>
+        <div className={`relative z-20 pt-3 mt-3 border-t border-rule flex flex-col gap-2 ${className}`}>
             <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-1.5">
                     <span
@@ -49,9 +49,12 @@ export default function InspectorActionBar({
             <div className="flex items-center gap-2">
                 <button
                     type="button"
-                    onClick={onCancel}
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        onCancel && onCancel();
+                    }}
                     disabled={isApplying}
-                    className="btn-ghost py-1.5 px-3 text-xs flex items-center gap-1.5 hover:text-warn transition-colors"
+                    className="btn-ghost py-1.5 px-3 text-xs flex items-center gap-1.5 hover:text-warn transition-colors pointer-events-auto cursor-pointer"
                     title="Discard staged changes and restore previous settings"
                 >
                     <RotateCcw size={13} />
@@ -60,14 +63,17 @@ export default function InspectorActionBar({
 
                 <button
                     type="button"
-                    onClick={onApply}
-                    disabled={isApplying || !isDirty}
-                    className={`btn-primary flex-1 py-1.5 px-3 text-xs flex items-center justify-center gap-1.5 transition-all ${
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        onApply && onApply();
+                    }}
+                    disabled={isApplying}
+                    className={`btn-primary flex-1 py-1.5 px-3 text-xs flex items-center justify-center gap-1.5 transition-all pointer-events-auto cursor-pointer ${
                         isDirty
-                            ? 'ring-1 ring-brass shadow-sm'
-                            : 'opacity-50 cursor-not-allowed'
+                            ? 'ring-1 ring-brass shadow-sm opacity-100'
+                            : 'opacity-80 hover:opacity-100'
                     }`}
-                    title={isDirty ? 'Commit staged changes to timeline' : 'No changes to apply'}
+                    title={isDirty ? 'Commit staged changes to timeline' : 'Commit current settings to timeline'}
                 >
                     {isApplying ? (
                         <>
