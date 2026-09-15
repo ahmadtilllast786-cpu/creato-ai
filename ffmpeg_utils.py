@@ -24,7 +24,7 @@ BROADCAST = "broadcast"        # broadcast master: -preset slow -crf 18 -b:v 8M 
 
 _X264_ARGS = {
     QUALITY: ["-c:v", "libx264", "-preset", "medium", "-crf", "18"],
-    QUALITY_FAST: ["-c:v", "libx264", "-preset", "fast", "-crf", "18"],
+    QUALITY_FAST: ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"],
     DELIVERY: ["-c:v", "libx264", "-preset", "fast", "-crf", "22"],
     BROADCAST: ["-c:v", "libx264", "-preset", "slow", "-crf", "18", "-pix_fmt", "yuv420p",
                 "-b:v", "8M", "-maxrate", "12M", "-bufsize", "16M"],
@@ -192,18 +192,24 @@ def video_encode_args(tier=QUALITY):
     if tier not in _X264_ARGS:
         raise ValueError(f"Unknown encode tier: {tier!r}")
 
-    mode = os.environ.get("FFMPEG_ENCODER", "x264").strip().lower()
+    mode = os.environ.get("FFMPEG_ENCODER", "auto").strip().lower()
     use_nvenc = False
     if mode in ("nvenc", "auto"):
         use_nvenc = nvenc_available()
         if mode == "nvenc" and not use_nvenc:
-            print("⚠️ [Encoder] FFMPEG_ENCODER=nvenc but h264_nvenc is not "
-                  "usable here — falling back to libx264")
+            try:
+                print("[Encoder] FFMPEG_ENCODER=nvenc but h264_nvenc is not "
+                      "usable here - falling back to libx264")
+            except Exception:
+                pass
 
     if not _announced:
         _announced = True
-        print(f"🎞️ [Encoder] video encoder: {'h264_nvenc' if use_nvenc else 'libx264'} "
-              f"(FFMPEG_ENCODER={mode})")
+        try:
+            print(f"[Encoder] video encoder: {'h264_nvenc' if use_nvenc else 'libx264'} "
+                  f"(FFMPEG_ENCODER={mode})")
+        except Exception:
+            pass
 
     return list((_NVENC_ARGS if use_nvenc else _X264_ARGS)[tier])
 

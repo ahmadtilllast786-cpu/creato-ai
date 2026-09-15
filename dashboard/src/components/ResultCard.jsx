@@ -443,21 +443,32 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             const data = await res.json();
             if (data.new_video_url) {
                 const serverUrl = getApiUrl(data.new_video_url);
-                setServerVideoFile(data.new_video_url.split('/').pop());
+                const newFilename = data.new_video_url.split('/').pop();
+                setServerVideoFile(newFilename);
+                setDurableSrc(null);
                 const remaining = { ...activeLayers, subtitles: null };
                 setActiveLayers(remaining);
                 if (remaining.hook || remaining.effects) {
-                    setCurrentVideoUrl(await renderInBrowser({
+                    const blobUrl = await renderInBrowser({
                         videoUrl: serverUrl,
                         durationInSeconds: clipDuration,
                         subtitles: null,
                         hook: remaining.hook,
                         effects: remaining.effects,
-                    }));
+                    });
+                    setCurrentVideoUrl(blobUrl);
+                    if (videoRef.current) {
+                        videoRef.current.src = blobUrl;
+                        videoRef.current.load();
+                    }
                 } else {
-                    setCurrentVideoUrl(serverUrl);
+                    const cacheBustedUrl = `${serverUrl}${serverUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
+                    setCurrentVideoUrl(cacheBustedUrl);
+                    if (videoRef.current) {
+                        videoRef.current.src = cacheBustedUrl;
+                        videoRef.current.load();
+                    }
                 }
-                if (videoRef.current) videoRef.current.load();
                 setShowSubtitleModal(false);
             }
         } catch (e) {
@@ -487,7 +498,10 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                     effects: newLayers.effects,
                 });
                 setCurrentVideoUrl(blobUrl);
-                if (videoRef.current) videoRef.current.load();
+                if (videoRef.current) {
+                    videoRef.current.src = blobUrl;
+                    videoRef.current.load();
+                }
                 setShowSubtitleModal(false);
                 return;
             }
@@ -529,7 +543,9 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
             const data = await res.json();
             if (data.new_video_url) {
                 const serverUrl = getApiUrl(data.new_video_url);
-                setServerVideoFile(data.new_video_url.split('/').pop());
+                const newFilename = data.new_video_url.split('/').pop();
+                setServerVideoFile(newFilename);
+                setDurableSrc(null);
                 // Subtitles are burned into the server file now — drop the
                 // browser subtitle layer and re-compose any remaining browser
                 // layers (hook/effects) over the new file so they aren't lost.
@@ -544,12 +560,18 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                         effects: remaining.effects,
                     });
                     setCurrentVideoUrl(blobUrl);
+                    if (videoRef.current) {
+                        videoRef.current.src = blobUrl;
+                        videoRef.current.load();
+                    }
                 } else {
-                    setCurrentVideoUrl(serverUrl);
+                    const cacheBustedUrl = `${serverUrl}${serverUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
+                    setCurrentVideoUrl(cacheBustedUrl);
+                    if (videoRef.current) {
+                        videoRef.current.src = cacheBustedUrl;
+                        videoRef.current.load();
+                    }
                 }
-                setTimeout(() => {
-                    if (videoRef.current) videoRef.current.load();
-                }, 50);
                 setShowSubtitleModal(false);
             }
         } catch (e) {

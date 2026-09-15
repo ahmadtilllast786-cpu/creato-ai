@@ -41,7 +41,7 @@ for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":5173 "') do (
 
 :: 3. Start Backend Server
 echo [3/4] Starting FastAPI Backend on http://127.0.0.1:8000 ...
-start "Creato AI - Backend" /d "%PROJECT_DIR%" /min cmd /k ".venv\Scripts\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8000"
+start "Creato AI - Backend" /d "%PROJECT_DIR%" /min cmd /k ".venv\Scripts\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8000 --reload"
 
 :: 4. Start Frontend Dashboard
 echo [4/4] Starting Vite Dashboard on http://localhost:5173 ...

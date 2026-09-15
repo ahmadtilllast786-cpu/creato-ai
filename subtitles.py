@@ -3,7 +3,7 @@ import re
 import subprocess
 import sys
 
-from ffmpeg_utils import (video_encode_args, escape_filter_value, QUALITY,
+from ffmpeg_utils import (video_encode_args, escape_filter_value, QUALITY, QUALITY_FAST,
                           METADATA_SCRUB, run_ffmpeg_command, open_video_capture,
                           ensure_file_unlocked, cleanup_temp_file)
 
@@ -527,7 +527,8 @@ def _sanitize_font_name(name):
 def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
                    font_name="Verdana", font_color="#FFFFFF",
                    border_color="#000000", border_width=2,
-                   bg_color="#000000", bg_opacity=0.0):
+                   bg_color="#000000", bg_opacity=0.0,
+                   tier=QUALITY_FAST):
     """
     Burns subtitles into the video using FFmpeg.
     Supports two modes:
@@ -618,7 +619,7 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
         '-map', '0:v:0',
         '-map', '0:a:0?',
         '-c:a', 'copy',
-        *video_encode_args(QUALITY),
+        *video_encode_args(tier),
         *METADATA_SCRUB,
         '-movflags', '+faststart',
         output_path
@@ -637,7 +638,7 @@ def burn_subtitles(video_path, srt_path, output_path, alignment=2, fontsize=16,
             '-map', '0:v:0',
             '-map', '0:a:0?',
             '-c:a', 'aac', '-b:a', '192k',
-            *video_encode_args(QUALITY),
+            *video_encode_args(tier),
             *METADATA_SCRUB,
             '-movflags', '+faststart',
             output_path
