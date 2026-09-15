@@ -497,6 +497,51 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
 
                 {/* Right: Controls */}
                 <div className="w-full md:w-80 flex flex-col max-h-[580px]">
+                    {/* Top Action Header directly inside Subtitle Options */}
+                    <div className="p-2.5 mb-2 rounded-card bg-paper2 border border-rule flex items-center justify-between gap-2 shrink-0">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                            <span className={`w-2 h-2 rounded-full shrink-0 transition-colors ${
+                                isDirty || textEdited ? 'bg-warn animate-pulse' : 'bg-ok/70'
+                            }`} />
+                            <span className="text-[11px] font-mono lowercase text-muted truncate">
+                                {isDirty || textEdited ? 'staged style' : 'captions applied'}
+                            </span>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                                type="button"
+                                onClick={handleCancel}
+                                disabled={isProcessing}
+                                className="btn-ghost py-1 px-2 text-xs flex items-center gap-1 hover:text-warn transition-colors cursor-pointer"
+                                title="Discard changes and close"
+                            >
+                                <RotateCcw size={12} />
+                                <span>Cancel</span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => onGenerate(styleOptions)}
+                                disabled={isProcessing}
+                                className={`btn-primary py-1 px-3 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                                    isDirty || textEdited ? 'ring-2 ring-brass shadow-sm' : 'opacity-90 hover:opacity-100'
+                                }`}
+                                title="Apply this subtitle style to the clip"
+                            >
+                                {isProcessing && !bulkRunning ? (
+                                    <>
+                                        <Loader2 size={12} className="animate-spin text-brassink" />
+                                        <span>Applying…</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Check size={12} />
+                                        <span>Apply Style</span>
+                                    </>
+                                )}
+                            </button>
+                        </div>
+                    </div>
+
                     <div className="space-y-5 flex-1 overflow-y-auto custom-scrollbar pr-1 pb-2">
                         {/* Caption presets (server-side karaoke burn) */}
                         <div>
@@ -508,7 +553,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                         onClick={() => applyPreset(p)}
                                         className={`px-2 py-1.5 rounded-input border text-xs transition-colors flex items-center gap-1.5 justify-center
                                             ${activePreset === p.id
-                                                ? 'border-[color:var(--color-accent)] text-ink'
+                                                ? 'border-[color:var(--color-accent)] text-ink ring-1 ring-[color:var(--color-accent)]'
                                                 : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}`}
                                         title={p.label}
                                     >
@@ -516,6 +561,32 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                         {p.label}
                                     </button>
                                 ))}
+                            </div>
+
+                            {/* Direct Apply button for selected preset */}
+                            <div className="flex items-center justify-between gap-2 mt-2 pt-2 border-t border-rule2/60">
+                                <span className="text-[11px] text-muted truncate">
+                                    {activePreset ? `Preset: ${CAPTION_PRESETS.find(p => p.id === activePreset)?.label || activePreset}` : 'Custom style'}
+                                </span>
+                                <button
+                                    type="button"
+                                    onClick={() => onGenerate(styleOptions)}
+                                    disabled={isProcessing}
+                                    className="btn-primary py-1 px-2.5 text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer shrink-0 shadow-sm"
+                                    title="Apply selected style preset now"
+                                >
+                                    {isProcessing && !bulkRunning ? (
+                                        <>
+                                            <Loader2 size={12} className="animate-spin text-brassink" />
+                                            <span>Applying…</span>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Check size={12} />
+                                            <span>Apply This Style</span>
+                                        </>
+                                    )}
+                                </button>
                             </div>
                             {style === 'karaoke' && (
                                 <div className="mt-3 space-y-3 animate-fade">
@@ -768,6 +839,67 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
                                 </div>
                             )}
                         </div>
+                    </div>
+
+                    {/* Sticky Bottom Action Bar inside Subtitle Options */}
+                    <div className="sticky bottom-0 bg-paper/95 backdrop-blur-sm border-t border-rule pt-2.5 pb-1 mt-2 space-y-2 z-30 shrink-0">
+                        <div className="flex items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={handleCancel}
+                                disabled={isProcessing}
+                                className="btn-ghost py-1.5 px-3 text-xs flex items-center justify-center gap-1.5 flex-1 cursor-pointer hover:text-warn transition-colors"
+                            >
+                                <RotateCcw size={13} />
+                                <span>Cancel</span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => onGenerate(styleOptions)}
+                                disabled={isProcessing}
+                                className={`btn-primary py-1.5 px-4 text-xs font-semibold flex items-center justify-center gap-2 flex-[2] transition-all cursor-pointer ${
+                                    isDirty || textEdited ? 'ring-2 ring-brass shadow-md' : 'opacity-90 hover:opacity-100'
+                                }`}
+                            >
+                                {isProcessing && !bulkRunning ? (
+                                    <>
+                                        <Loader2 size={13} className="animate-spin text-brassink" />
+                                        <span>Applying Style…</span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Check size={13} />
+                                        <span>Apply Style</span>
+                                    </>
+                                )}
+                            </button>
+                        </div>
+                        {onApplyAll && bulkCount > 1 && (
+                            <button
+                                type="button"
+                                onClick={() => onApplyAll({ ...styleOptions, captions: null })}
+                                disabled={isProcessing}
+                                className="btn-ghost w-full py-1 px-2 text-[11px] flex items-center justify-center gap-1.5 cursor-pointer"
+                            >
+                                {bulkRunning ? (
+                                    <><Loader2 size={12} className="animate-spin" /> applying to all…</>
+                                ) : (
+                                    `apply this style to all ${bulkCount} clips`
+                                )}
+                            </button>
+                        )}
+                        {onRemove && (
+                            <div className="text-center pt-0.5">
+                                <button
+                                    type="button"
+                                    onClick={onRemove}
+                                    disabled={isProcessing}
+                                    className="text-[11px] text-muted hover:text-warn underline underline-offset-2 lowercase cursor-pointer"
+                                >
+                                    remove captions from clip
+                                </button>
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>
