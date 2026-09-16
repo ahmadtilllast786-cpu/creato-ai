@@ -652,7 +652,7 @@ function App() {
   useEffect(() => {
     let interval;
     if ((status === 'processing' || status === 'completed') && jobId) {
-      interval = setInterval(async () => {
+      const checkStatus = async () => {
         try {
           const data = await pollJob(jobId);
           console.log("Job status:", data);
@@ -664,7 +664,7 @@ function App() {
 
           if (data.status === 'completed') {
             setStatus('complete');
-            clearInterval(interval);
+            if (interval) clearInterval(interval);
             refreshMe();
           } else if (data.status === 'failed') {
             setStatus('error');
@@ -674,18 +674,25 @@ function App() {
               errorMsg = nonExit || data.logs[data.logs.length - 1];
             }
             setLogs(prev => [...prev, "Error: " + (errorMsg || "Process failed")]);
-            clearInterval(interval);
+            if (interval) clearInterval(interval);
             refreshMe();
           } else {
-            // Update logs if available
-            if (data.logs) setLogs(data.logs);
+            // Update logs if available without wiping existing progress
+            if (data.logs && data.logs.length > 0) {
+              setLogs(data.logs);
+            }
           }
         } catch (e) {
           console.error("Polling error", e);
         }
-      }, 2000);
+      };
+
+      checkStatus();
+      interval = setInterval(checkStatus, 1500);
     }
-    return () => clearInterval(interval);
+    return () => {
+      if (interval) clearInterval(interval);
+    };
   }, [status, jobId, refreshMe]);
 
 
@@ -844,7 +851,10 @@ function App() {
       return;
     }
     setStatus('processing');
-    setLogs(["Starting process..."]);
+    const initialNote = data.type === 'url'
+      ? `Preparing YouTube URL: ${data.payload}`
+      : (data.type === 'thumbnail_session' ? 'Preparing Studio session…' : `Preparing video file: ${data.payload?.name || 'upload'}`);
+    setLogs(["Starting process...", initialNote, "Connecting to backend server..."]);
     setResults(null);
     // Studio handovers have no local media object; the preview switches to the
     // backend-served source once the job id is known.
@@ -917,6 +927,7 @@ function App() {
         return;
       }
 
+      setLogs(prev => [...prev, `Job registered (ID: ${resData.job_id.slice(0, 8)}). Initializing pipeline...`]);
       setJobId(resData.job_id);
       if (data.type === 'thumbnail_session') {
         setProcessingMedia({ type: 'server', payload: `/api/source/${resData.job_id}` });
@@ -939,7 +950,7 @@ function App() {
         return;
       }
       setStatus('error');
-      setLogs(l => [...l, `Error starting job: ${e.message}`]);
+      setLogs(l => [...l, `Error starting job: ${e.message}. If the server is not responding, ensure the backend is running on port 8000.`]);
     }
   };
 

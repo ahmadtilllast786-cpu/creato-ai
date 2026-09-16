@@ -2070,6 +2070,11 @@ if __name__ == '__main__':
     output_format = args.format
 
     script_start_time = time.time()
+    print("🎬 Video processing pipeline initialized.", flush=True)
+    if args.url:
+        print(f"📥 Preparing to download YouTube video: {args.url}", flush=True)
+    else:
+        print(f"📁 Source video selected: {os.path.basename(args.input)}", flush=True)
     
     def _ensure_dir(path: str) -> str:
         """Create directory if missing and return the same path."""
@@ -2208,6 +2213,7 @@ if __name__ == '__main__':
                 clips_data = None
 
         if clips_data is None:
+            print("🤖 Analyzing transcript with AI to identify viral moments...", flush=True)
             if transcript is not None:
                 clips_data = get_viral_clips(transcript, duration)
             else:
@@ -2291,6 +2297,7 @@ if __name__ == '__main__':
                         return False
 
                     try:
+                        print(f"🎥 Tracking subjects & rendering vertical video for clip {i+1}...", flush=True)
                         success = render_clip(clip_temp_path, clip_final_path, output_format)
                     except Exception as render_err:
                         print(f"   ❌ Render failed for clip {i+1}: {render_err}")

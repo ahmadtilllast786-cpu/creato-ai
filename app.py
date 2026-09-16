@@ -428,6 +428,24 @@ publish_jobs: Dict[str, Dict] = {}  # {publish_id: {status, result, error}}
 concurrency_semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
 
 
+def _get_python_executable() -> str:
+    """Returns the Python executable to use for background workers/subprocesses.
+    Prefers the project's local .venv interpreter if available, ensuring all
+    heavy dependencies (cv2, torch, whisper, yt-dlp) are always accessible even
+    if uvicorn was started via an ambient or global Python environment.
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(base_dir, ".venv", "Scripts", "python.exe"),
+        os.path.join(base_dir, ".venv", "bin", "python"),
+        sys.executable,
+    ]
+    for c in candidates:
+        if os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    return sys.executable
+
+
 def _enqueue_job(job_id: str, priority: int = 2):
     job_queue.put_nowait((priority, next(_job_seq), job_id))
 
@@ -1266,6 +1284,8 @@ async def process_queue():
                 print(f"⏸️ Draining — leaving {job_id} for the next instance.")
                 continue
             print(f"🔄 Acquired slot for job: {job_id}")
+            if job_id in jobs:
+                jobs[job_id].setdefault('logs', []).append("Worker slot acquired. Preparing execution environment...")
             _running_jobs.add(job_id)
             _touch_manifest(job_id)
 
@@ -1926,12 +1946,14 @@ async def run_job(job_id, job_data):
     
     cmd = job_data['cmd']
     env = dict(job_data['env']) if job_data.get('env') else os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
     output_dir = job_data['output_dir']
     
     jobs[job_id]['status'] = 'processing'
     jobs[job_id]['logs'].append("Job started by worker.")
+    jobs[job_id]['logs'].append("🎬 Video processing pipeline initialized.")
     print(f"🎬 [run_job] Executing command for {job_id}: {' '.join(cmd)}")
     
     try:
@@ -2097,7 +2119,7 @@ async def _probe_youtube_quality(url: str) -> dict:
     def _run():
         try:
             proc = subprocess.run(
-                [sys.executable, QUALITY_PROBE_SCRIPT, "--url", url],
+                [_get_python_executable(), QUALITY_PROBE_SCRIPT, "--url", url],
                 capture_output=True, timeout=75,
             )
             return json.loads(proc.stdout.decode(errors="replace").strip() or "{}")
@@ -2458,7 +2480,7 @@ async def process_endpoint(
     # outside Docker is whatever interpreter happens to be first — not the venv
     # running this server. Every job then dies on `import cv2`. The quality
     # probe above already gets this right.
-    cmd = [sys.executable, "-u", "main.py"] # -u for unbuffered
+    cmd = [_get_python_executable(), "-u", "main.py"] # -u for unbuffered
     env = os.environ.copy()
     if not paid_allowed:
         # Daily paid-proxy budget hit: this job runs on the free routes only.
@@ -2625,7 +2647,7 @@ async def process_endpoint(
     # Enqueue Job
     jobs[job_id] = {
         'status': 'queued',
-        'logs': [f"Job {job_id} queued."],
+        'logs': [f"Job {job_id[:8]} queued. Waiting for worker slot..."],
         'cmd': cmd,
         'env': env,
         'output_dir': job_output_dir,

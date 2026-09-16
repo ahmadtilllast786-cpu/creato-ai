@@ -26,18 +26,7 @@ if not exist "%PROJECT_DIR%\.venv\Scripts\python.exe" (
 
 :: 2. Free up ports 8000 and 5173 if already occupied
 echo [2/4] Checking network ports 8000 and 5173...
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":8000 "') do (
-    if "%%a" neq "0" (
-        echo [*] Freeing port 8000 PID %%a
-        taskkill /F /PID %%a >nul 2>&1
-    )
-)
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":5173 "') do (
-    if "%%a" neq "0" (
-        echo [*] Freeing port 5173 PID %%a
-        taskkill /F /PID %%a >nul 2>&1
-    )
-)
+powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 8000, 5173 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }"
 
 :: 3. Start Backend Server
 echo [3/4] Starting FastAPI Backend on http://127.0.0.1:8000 ...

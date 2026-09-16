@@ -19,8 +19,12 @@ def _strip_paths(line):
 # match's groups, or None to keep the (path-stripped) line verbatim.
 _RULES = [
     # Worker/job lifecycle + errors: keep, minus any paths.
-    (re.compile(r'^(Job started|Process finished|Process failed|'
+    (re.compile(r'^(Job started|Job [a-f0-9\-]+ queued|Worker slot acquired|Process finished|Process failed|'
                 r'Execution error|No metadata|❌)'), None),
+    # Pipeline stages: initialization, source preparation, transcription, analysis, rendering
+    (re.compile(r'^(🎬 Initializing|🚀 Initializing|🎬 Video processing pipeline|📥 Preparing to download|'
+                r'📥 Downloading video|📁 Source video|📁 Processing|🤖 Analyzing transcript|'
+                r'🎥 Tracking subjects|⚙️ Rendering|💬 Generating|✨ Finalizing)'), None),
     # Live transcription progress emitted by transcribe_backends.
     (re.compile(r'^🎙️ Transcribing… \d+%'), None),
     (re.compile(r'Transcribing (video|audio)'), '🎙️ Transcribing audio…'),
