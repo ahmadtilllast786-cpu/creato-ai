@@ -348,7 +348,7 @@ def _analyze_trajectory(input_video, scenes_boundaries, scene_strategies,
 
                 if frame_number % m.DETECT_STRIDE == 0 or cut:
                     candidates = m.detect_face_candidates(frame)
-                    target_box = tracker.get_target(candidates, frame_number, orig_w, orig_h)
+                    target_box = tracker.get_target(candidates, frame_number, orig_w, orig_h, crop_width=cameraman.crop_width)
                     if target_box:
                         scaled_target = [int(v * scale) for v in target_box]
                         cameraman.update_target(scaled_target)

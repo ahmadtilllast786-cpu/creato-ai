@@ -118,7 +118,7 @@ def stabilize_crop_path(
     orig_width: int,
     crop_width: int,
     window: int = 5,
-    max_step_ratio: float = 0.02,
+    max_step_ratio: float = 0.018,
     outlier_ratio: float = 0.06,
 ) -> List[Optional[int]]:
     """Remove isolated detector spikes and cap per-frame crop movement.

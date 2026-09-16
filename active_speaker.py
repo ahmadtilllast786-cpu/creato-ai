@@ -30,7 +30,7 @@ WINDOW_SECONDS = 0.4
 # Off by default like every other new routing signal here. SPEAKER_SIGNAL=1
 # gates SPLIT on both people actually talking; SPEAKER_CUT=1 additionally
 # replaces the stack with hard cuts to whoever holds the floor.
-ENABLED = os.environ.get("SPEAKER_SIGNAL", "0") == "1"
+ENABLED = os.environ.get("SPEAKER_SIGNAL", "1").strip() != "0"
 CUT_MODE = os.environ.get("SPEAKER_CUT", "0") == "1"
 
 # A window counts as speech only if its audio RMS clears this fraction of the

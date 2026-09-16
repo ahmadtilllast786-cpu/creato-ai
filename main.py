@@ -137,17 +137,17 @@ class SmoothedCameraman:
              self.crop_width = video_width
              self.crop_height = int(self.crop_width / aspect_ratio)
              
-        # Dynamic Dead-Zone (Hysteresis): ±7% of screen dimension
+        # Dynamic Dead-Zone (Hysteresis): ±8% of screen dimension
         # Micro-movements within this zone keep the camera smooth and stationary
-        self.deadzone_x = self.crop_width * 0.07
-        self.deadzone_y = self.crop_height * 0.07
+        self.deadzone_x = self.crop_width * 0.08
+        self.deadzone_y = self.crop_height * 0.08
 
         # Exponential Moving Average (EMA) smoothing parameters
-        self.smoothing_factor_x = 0.10  # Damped camera following (0.08 - 0.12)
-        self.smoothing_factor_y = 0.08
-        self.max_step_x = self.video_width * 0.030  # Velocity clamping: max 3.0% pan per frame
-        self.max_step_y = self.video_height * 0.030
-        self.target_headroom = 0.22  # Comfortable 18%-25% headroom from top
+        self.smoothing_factor_x = 0.09  # Damped, cinematic camera following
+        self.smoothing_factor_y = 0.07
+        self.max_step_x = self.video_width * 0.022  # Velocity clamping: max 2.2% pan per frame
+        self.max_step_y = self.video_height * 0.022
+        self.target_headroom = 0.20  # Comfortable 18%-22% headroom from top
 
         self.current_center_x = video_width / 2.0
         self.target_center_x = video_width / 2.0
@@ -219,7 +219,7 @@ class SmoothedCameraman:
             diff_x = self.target_center_x - self.current_center_x
             diff_y = self.target_center_y - self.current_center_y
 
-            # 1. Dynamic Dead-Zone (Hysteresis): ±7% of screen dimension
+            # 1. Dynamic Dead-Zone (Hysteresis): ±8% of screen dimension
             # If subject micro-moves within deadband, keep camera stationary
             if abs(diff_x) > self.deadzone_x:
                 # 2. Exponential Moving Average (EMA) Smoothing past dead-band
@@ -230,42 +230,8 @@ class SmoothedCameraman:
                 step_y = (diff_y - math.copysign(self.deadzone_y, diff_y)) * self.smoothing_factor_y
                 self.current_center_y += step_y
 
-        # 3. Velocity Clamping: prevent whipping during sudden fast motion
-        if not force_snap:
-            delta_x = self.current_center_x - prev_cx
-            if abs(delta_x) > self.max_step_x:
-                self.current_center_x = prev_cx + math.copysign(self.max_step_x, delta_x)
-            delta_y = self.current_center_y - prev_cy
-            if abs(delta_y) > self.max_step_y:
-                self.current_center_y = prev_cy + math.copysign(self.max_step_y, delta_y)
-
-        # 4. Safe-Zone Aware Auto-Reframing (Platform UI Collision Guard)
-        # Safe Envelope: X in 12% - 78%, Y in 15% - 70%
-        crop_x0 = self.current_center_x - self.crop_width / 2.0
-        crop_y0 = self.current_center_y - self.crop_height / 2.0
-        
-        norm_subj_x = (self.target_center_x - crop_x0) / max(1.0, float(self.crop_width))
-        norm_subj_y = (self.target_center_y - crop_y0) / max(1.0, float(self.crop_height))
-
-        # Right-Rail Avoidance: ensure subject face never sits under right action buttons (X > 78%)
-        if norm_subj_x > 0.78:
-            overlap_r = (norm_subj_x - 0.78) * self.crop_width
-            self.current_center_x += overlap_r
-        elif norm_subj_x < 0.12:
-            overlap_l = (0.12 - norm_subj_x) * self.crop_width
-            self.current_center_x -= overlap_l
-
-        # Headroom Protection: maintain comfortable headroom (Y: 18%-25%), avoid top header
-        if norm_subj_y < 0.18:
-            overlap_t = (0.18 - norm_subj_y) * self.crop_height
-            self.current_center_y -= overlap_t
-        elif norm_subj_y > 0.70:
-            overlap_b = (norm_subj_y - 0.70) * self.crop_height
-            self.current_center_y += overlap_b
-
-        # 5. Soft boundary deceleration near canvas boundaries
-        half_crop = self.crop_width / 2.0
-        if not force_snap:
+            # 3. Soft boundary deceleration near canvas boundaries
+            half_crop = self.crop_width / 2.0
             min_cx = half_crop
             max_cx = self.video_width - half_crop
             soft_margin_x = (max_cx - min_cx) * 0.05 if max_cx > min_cx else 1.0
@@ -277,6 +243,14 @@ class SmoothedCameraman:
             if self.current_center_x > max_cx - soft_margin_x and dx > 0 and soft_margin_x > 0:
                 t = max(0.0, (max_cx - self.current_center_x) / soft_margin_x)
                 self.current_center_x = prev_cx + dx * (0.5 + 0.5 * t)
+
+            # 4. Strict Velocity Clamping: guarantees no camera whipping or jerky snaps
+            delta_x = self.current_center_x - prev_cx
+            if abs(delta_x) > self.max_step_x:
+                self.current_center_x = prev_cx + math.copysign(self.max_step_x, delta_x)
+            delta_y = self.current_center_y - prev_cy
+            if abs(delta_y) > self.max_step_y:
+                self.current_center_y = prev_cy + math.copysign(self.max_step_y, delta_y)
 
         # 6. Dynamic Scale Punch-In for Vertical Headroom Headroom Freedom
         scale = 1.0
@@ -319,7 +293,7 @@ class SpeakerTracker:
     """
     Tracks speakers over time to prevent rapid switching and handle temporary obstructions.
     """
-    def __init__(self, stabilization_frames=15, cooldown_frames=30):
+    def __init__(self, stabilization_frames=15, cooldown_frames=35):
         self.active_speaker_id = None
         self.speaker_scores = {}  # {id: score}
         self.last_seen = {}       # {id: frame_number}
@@ -327,7 +301,7 @@ class SpeakerTracker:
         
         # Hyperparameters
         self.stabilization_threshold = stabilization_frames # Frames needed to confirm a new speaker
-        self.switch_cooldown = cooldown_frames              # Minimum frames before switching again
+        self.switch_cooldown = cooldown_frames              # Minimum frames before switching again (~1.2s at 30fps)
         self.last_switch_frame = -1000
         
         # ID tracking
@@ -335,13 +309,7 @@ class SpeakerTracker:
         self.known_faces = [] # [{'id': 0, 'box': [x,y,w,h], 'last_frame': 123}]
 
     def reset(self):
-        """Forget every speaker at a scene cut.
-
-        Identity, hysteresis and the switch cooldown are all about continuity
-        within a shot. After a cut none of it applies: the sticky x3 bonus and
-        the cooldown were holding the previous shot's speaker (returning None)
-        for up to 30 frames while a new face sat unframed.
-        """
+        """Forget every speaker at a scene cut."""
         self.active_speaker_id = None
         self.speaker_scores = {}
         self.last_seen = {}
@@ -349,19 +317,21 @@ class SpeakerTracker:
         self.last_switch_frame = -1000
         self.known_faces = []
 
-    def get_target(self, face_candidates, frame_number, width, height=None):
+    def get_target(self, face_candidates, frame_number, width, height=None, crop_width=None):
         """
-        Decides which face to focus on.
+        Decides which face or group of faces to focus on.
+        Intelligently supports:
+          - Solo performer tracking with persistent memory
+          - Smart Two-Shot framing when two subjects fit comfortably in 9:16
+          - Active speaker selection with hysteresis and anti-jitter cooldown in multi-person/group scenes
         face_candidates: list of {'box': [x,y,w,h], 'score': float}
         """
         current_candidates = []
+        frame_height = height if height is not None else int(round(width * 9.0 / 16.0))
+        cw = crop_width if crop_width else int(round(frame_height * 9.0 / 16.0))
 
-        # 1. Match faces to known IDs. Use spatial overlap plus x/y and size
-        # continuity, and never assign one old face to two detections in the
-        # same frame. Horizontal-only matching swapped identities whenever two
-        # people crossed or one detector box briefly disappeared.
+        # 1. Match faces to known IDs using spatial overlap, motion vector, and size continuity
         used_ids = set()
-        frame_height = height if height is not None else width
         for face in face_candidates:
             box = face['box']
             best_match_id = match_box_to_track(
@@ -369,8 +339,6 @@ class SpeakerTracker:
                 used_ids=used_ids, max_age=45,
             )
 
-            # If no match, assign a new ID. The one-to-one set is updated
-            # immediately so duplicate detector boxes cannot share an ID.
             if best_match_id is None:
                 best_match_id = self.next_id
                 self.next_id += 1
@@ -391,72 +359,93 @@ class SpeakerTracker:
                 'score': face['score']
             })
 
-        # 2. Update Scores with decay
+        # 2. Update Scores with robust normalization and temporal decay
         for pid in list(self.speaker_scores.keys()):
-             self.speaker_scores[pid] *= 0.85 # Faster decay (was 0.9)
-             if self.speaker_scores[pid] < 0.1:
-                 del self.speaker_scores[pid]
+            if pid not in used_ids:
+                self.speaker_scores[pid] *= 0.85
+                if self.speaker_scores[pid] < 0.05:
+                    del self.speaker_scores[pid]
 
-        # Add new scores
+        frame_area = max(1.0, float(width * frame_height))
         for cand in current_candidates:
             pid = cand['id']
-            # Score is purely based on size (proximity) now that we don't have mouth
-            raw_score = cand['score'] / (width * width * 0.05)
-            self.speaker_scores[pid] = self.speaker_scores.get(pid, 0) + raw_score
+            area_ratio = float(cand['score']) / frame_area
+            # Scale so typical faces yield healthy 1.0 - 10.0 score range
+            raw_score = area_ratio * 100.0
+            # Central prominence bonus: faces closer to screen center get up to 20% bonus
+            cx = cand['box'][0] + cand['box'][2] / 2.0
+            center_offset = abs(cx - width / 2.0) / float(width)
+            center_bonus = max(0.6, 1.2 - center_offset)
+            raw_score *= center_bonus
+            self.speaker_scores[pid] = self.speaker_scores.get(pid, 0.0) * 0.90 + raw_score
 
-        # 3. Determine Best Speaker
         if not current_candidates:
-            # If no one found, maintain last active speaker if cooldown allows
-            # to avoid black screen or jump to 0,0
-            return None 
-            
+            # Persistent Subject Memory: If no candidate in this frame (e.g. blink, rapid turn),
+            # check if the active speaker was seen within the last 45 frames (1.5s)
+            if self.active_speaker_id is not None:
+                recent_active = next((kf for kf in self.known_faces
+                                      if kf['id'] == self.active_speaker_id
+                                      and frame_number - kf.get('last_frame', 0) <= 45), None)
+                if recent_active:
+                    return recent_active['box']
+            return None
+
+        # 3. Smart Two-Shot Framing: If 2 dominant characters fit within 9:16 crop envelope, frame BOTH!
+        if len(current_candidates) >= 2:
+            sorted_cands = sorted(current_candidates,
+                                  key=lambda c: self.speaker_scores.get(c['id'], 0.0),
+                                  reverse=True)
+            c1, c2 = sorted_cands[0], sorted_cands[1]
+            s1 = self.speaker_scores.get(c1['id'], 0.0)
+            s2 = self.speaker_scores.get(c2['id'], 0.0)
+
+            # If secondary performer is significant (at least 25% prominence of primary)
+            if s1 > 0 and (s2 / s1) >= 0.25:
+                b1, b2 = c1['box'], c2['box']
+                min_x = min(b1[0], b2[0])
+                max_x = max(b1[0] + b1[2], b2[0] + b2[2])
+                span_x = max_x - min_x
+                # If combined span fits inside 78% of crop width, frame both characters together!
+                if span_x <= cw * 0.78:
+                    min_y = min(b1[1], b2[1])
+                    max_y = max(b1[1] + b1[3], b2[1] + b2[3])
+                    return [min_x, min_y, span_x, max(1, max_y - min_y)]
+
+        # 4. Single / Multi-Person Active Speaker Selection
         best_candidate = None
-        max_score = -1
-        
+        max_score = -1.0
         for cand in current_candidates:
             pid = cand['id']
-            total_score = self.speaker_scores.get(pid, 0)
-            
-            # Hysteresis: HUGE Bonus for current active speaker
+            total_score = self.speaker_scores.get(pid, 0.0)
+            # Hysteresis: 3.5x sticky bonus for current active speaker to prevent camera flapping
             if pid == self.active_speaker_id:
-                total_score *= 3.0 # Sticky factor
-                
+                total_score *= 3.5
             if total_score > max_score:
                 max_score = total_score
                 best_candidate = cand
 
-        # 4. Decide Switch
+        # 5. Switching with Cooldown Protection
         if best_candidate:
             target_id = best_candidate['id']
-            
             if target_id == self.active_speaker_id:
                 self.locked_counter += 1
                 return best_candidate['box']
-            
-            # New person. The cooldown must hold whether or not the current
-            # speaker happens to be detected in THIS frame.
-            #
-            # It used to fall through and switch when the active speaker was
-            # missing from the candidate list — a blink, a head turn or one
-            # motion-blurred frame was enough. That is precisely when the
-            # cooldown is needed, so it only ever fired when it wasn't: 3 of 7
-            # target switches measured on a 12s clip (25-jul-2026) jumped the
-            # cooldown this way, and every jump drags the camera across frame.
-            #
-            # Returning None holds instead: the caller only calls
-            # update_target() on a truthy box, so the camera keeps its current
-            # target and finishes whatever move it was making. The hold is
-            # bounded by the cooldown itself — once it expires, a speaker who
-            # really did leave the shot is switched away from normally.
+
+            # Enforce switch cooldown so camera pans only on sustained speaker turns
             if frame_number - self.last_switch_frame < self.switch_cooldown:
                 old_cand = next((c for c in current_candidates if c['id'] == self.active_speaker_id), None)
-                return old_cand['box'] if old_cand else None
+                if old_cand:
+                    return old_cand['box']
+                recent_active = next((kf for kf in self.known_faces
+                                      if kf['id'] == self.active_speaker_id
+                                      and frame_number - kf.get('last_frame', 0) <= 45), None)
+                return recent_active['box'] if recent_active else None
 
             self.active_speaker_id = target_id
             self.last_switch_frame = frame_number
             self.locked_counter = 0
             return best_candidate['box']
-            
+
         return None
 
 # Detectors never need full-resolution frames: MediaPipe returns relative
