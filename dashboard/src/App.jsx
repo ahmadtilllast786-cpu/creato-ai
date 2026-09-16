@@ -882,9 +882,31 @@ function App() {
         auto_hook_style: data.autoHook ? (data.autoHookStyle || 'classic') : null,
         // 'auto' is the server default, so only a deliberate choice travels.
         layouts: data.layout && data.layout !== 'auto' ? data.layout : null,
+        subtitle_style: data.subtitleStyle || null,
+        bg_audio_volume: data.bgAudioVolume != null ? String(data.bgAudioVolume) : null,
+        fresh_clips: data.freshClips ? '1' : '0',
       };
 
-      if (data.type === 'url') {
+      if (data.bgAudio || data.type === 'file') {
+        const formData = new FormData();
+        if (data.type === 'file' && data.payload) {
+          formData.append('file', data.payload);
+        } else if (data.type === 'url' && data.payload) {
+          formData.append('url', data.payload);
+        }
+        if (data.bgAudio) {
+          formData.append('bg_audio', data.bgAudio);
+        }
+        formData.append('acknowledged', data.acknowledged ? 'true' : 'false');
+        formData.append('output_format', data.outputFormat || 'auto');
+        if (forceLowQuality) {
+          formData.append('force_low_quality', 'true');
+        }
+        for (const [k, v] of Object.entries(advanced)) {
+          if (v != null) formData.append(k, v);
+        }
+        body = formData;
+      } else if (data.type === 'url') {
         headers['Content-Type'] = 'application/json';
         body = JSON.stringify({
           url: data.payload,
@@ -903,15 +925,6 @@ function App() {
           output_format: data.outputFormat || 'auto',
           ...Object.fromEntries(Object.entries(advanced).filter(([, v]) => v != null)),
         });
-      } else {
-        const formData = new FormData();
-        formData.append('file', data.payload);
-        formData.append('acknowledged', data.acknowledged ? 'true' : 'false');
-        formData.append('output_format', data.outputFormat || 'auto');
-        for (const [k, v] of Object.entries(advanced)) {
-          if (v != null) formData.append(k, v);
-        }
-        body = formData;
       }
 
       const res = await apiFetch('/api/process', { method: 'POST', headers, body });

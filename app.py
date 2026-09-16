@@ -2348,6 +2348,10 @@ async def process_endpoint(
     thumbnail_session_id: Optional[str] = Form(None),
     captions: Optional[str] = Form(None),
     upload_id: Optional[str] = Form(None),
+    bg_audio: Optional[UploadFile] = File(None),
+    bg_audio_volume: Optional[str] = Form(None),
+    subtitle_style: Optional[str] = Form(None),
+    fresh_clips: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
     if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
@@ -2383,6 +2387,9 @@ async def process_endpoint(
         thumbnail_session_id = body.get("thumbnail_session_id")
         captions = body.get("captions")
         upload_id = body.get("upload_id")
+        bg_audio_volume = body.get("bg_audio_volume") or bg_audio_volume
+        subtitle_style = body.get("subtitle_style") or subtitle_style
+        fresh_clips = body.get("fresh_clips") or fresh_clips
 
     # Normalize output format (auto = keep pipeline default).
     if output_format not in ("vertical", "horizontal", "square"):
@@ -2629,6 +2636,34 @@ async def process_endpoint(
     cmd.extend(["-o", job_output_dir])
     if output_format and output_format != "auto":
         cmd.extend(["--format", output_format])
+
+    # Optional Background Music
+    if bg_audio and getattr(bg_audio, "filename", None):
+        safe_bg = os.path.basename(bg_audio.filename or "bg_audio.mp3")
+        bg_audio_path = os.path.join(UPLOAD_DIR, f"{job_id}_bgaudio_{safe_bg}")
+        with open(bg_audio_path, "wb") as buffer:
+            while chunk := await bg_audio.read(1024 * 1024):
+                buffer.write(chunk)
+        cmd.extend(["--bg-audio", bg_audio_path])
+        if bg_audio_volume:
+            try:
+                cmd.extend(["--bg-audio-volume", str(float(bg_audio_volume))])
+            except (ValueError, TypeError):
+                pass
+        print(f"[bg-audio] job={job_id} file={safe_bg} vol={bg_audio_volume or 0.18}")
+
+    # Optional Pre-Selected Subtitle Style
+    if subtitle_style:
+        sub_preset = str(subtitle_style).strip().lower()
+        env["AUTO_CAPTION_STYLE"] = sub_preset
+        cmd.extend(["--subtitle-style", sub_preset])
+        print(f"[subtitles] job={job_id} style={sub_preset}")
+
+    # Force fresh clip extraction (bypass cached moments)
+    if fresh_clips and str(fresh_clips).lower() in ("1", "true", "yes"):
+        env["FORCE_FRESH_CLIPS"] = "1"
+        cmd.append("--fresh")
+        print(f"[fresh-clips] job={job_id} forced fresh clip discovery")
 
     print(f"[attestation] job={job_id} ip={attestation['ip']} source={attestation['source']} ack=true")
 

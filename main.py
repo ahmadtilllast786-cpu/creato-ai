@@ -1053,28 +1053,118 @@ def finalize_clip_passthrough(input_video, final_output_video):
     return True
 
 
-def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=None):
-    """Burn the default caption style onto a finished clip.
+def get_media_duration(file_path: str) -> float:
+    """Gets audio or video duration in seconds via ffprobe."""
+    if not file_path or not os.path.exists(file_path):
+        return 0.0
+    try:
+        cmd = [
+            'ffprobe', '-v', 'error',
+            '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            file_path
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10)
+        return float(res.stdout.strip())
+    except Exception:
+        return 0.0
 
-    ``split_ranges``: (start, end) stretches, in clip seconds, rendered with
-    the SPLIT layout; captions there sit on the seam between the two speakers
-    instead of the bottom. None reads the render's own sidecar next to
-    ``clip_path`` (layout_ranges), which is where recut hands it over.
 
-    Captions are mandatory for short-form to land, but they were opt-in behind a
-    modal and only 9% of delivered clips ever got them (prod audit, 25-jul-2026).
-    So every clip now ships captioned by default.
+def mix_background_audio(video_path: str, bg_audio_path: str, clip_index: int, total_clips: int, clip_duration: float, bg_volume: float = 0.18, output_path: str = None) -> str:
+    """Mixes a background audio track into the video with ducked volume and intelligent non-repeating offsets.
+    
+    Each clip receives a distinct, non-overlapping or phase-staggered segment of the background track
+    with smooth 1.0s fade-in and 1.5s fade-out, keeping the speech track loud and crisp.
+    """
+    if not bg_audio_path or not os.path.exists(bg_audio_path) or not os.path.exists(video_path):
+        return video_path
 
-    The captioned file is written ALONGSIDE the clip as
-    ``subtitled_<ts>_<clip>.mp4`` — the same convention /api/subtitle uses — so
-    the untouched original stays on disk and re-styling from the modal replaces
-    the captions instead of burning a second layer over them.
+    ensure_file_unlocked(video_path)
+    output_dir = os.path.dirname(video_path)
+    stem = os.path.basename(video_path)
+    if not output_path:
+        output_path = os.path.join(output_dir, f"bgm_{int(time.time())}_{uuid.uuid4().hex[:6]}_{stem}")
 
-    Returns the captioned path, or None when captions were skipped (silent
-    video, no words in range, AUTO_CAPTIONS=0, or any failure — a caption
-    problem must never cost the user the clip they already paid for).
+    try:
+        bg_dur = get_media_duration(bg_audio_path)
+        actual_clip_dur = get_media_duration(video_path) or clip_duration or 30.0
+
+        # Intelligent offset calculation so each clip gets a different part of the audio
+        if bg_dur > actual_clip_dur:
+            if bg_dur >= actual_clip_dur * max(1, total_clips):
+                start_offset = clip_index * actual_clip_dur
+            else:
+                stride = (bg_dur - actual_clip_dur) / max(1, total_clips)
+                start_offset = (clip_index * max(10.0, stride)) % max(1.0, bg_dur - actual_clip_dur)
+        else:
+            start_offset = (clip_index * 7.5) % max(1.0, bg_dur)
+
+        start_offset = max(0.0, min(start_offset, max(0.0, bg_dur - 2.0)))
+        fade_in = min(1.0, actual_clip_dur * 0.1)
+        fade_out = min(1.5, actual_clip_dur * 0.15)
+        fade_out_st = max(0.0, actual_clip_dur - fade_out)
+
+        # Check whether source video has an audio stream
+        probe_cmd = [
+            'ffprobe', '-v', 'error',
+            '-select_streams', 'a:0',
+            '-show_entries', 'stream=codec_type',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            video_path
+        ]
+        has_voice = False
+        try:
+            p = subprocess.run(probe_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5)
+            has_voice = "audio" in p.stdout.lower()
+        except Exception:
+            has_voice = True
+
+        # Volume ducking: default 0.18 (18%) low voice so speech is completely clear
+        vol = max(0.05, min(0.50, float(bg_volume)))
+
+        if has_voice:
+            filter_complex = (
+                f"[0:a]volume=1.0[voice];"
+                f"[1:a]volume={vol:.2f},afade=t=in:st=0:d={fade_in:.1f},afade=t=out:st={fade_out_st:.1f}:d={fade_out:.1f}[bg];"
+                f"[voice][bg]amix=inputs=2:duration=first:dropout_transition=2[aout]"
+            )
+        else:
+            filter_complex = (
+                f"[1:a]volume={max(0.35, vol * 2):.2f},afade=t=in:st=0:d={fade_in:.1f},afade=t=out:st={fade_out_st:.1f}:d={fade_out:.1f}[aout]"
+            )
+
+        cmd = [
+            'ffmpeg', '-y',
+            '-i', video_path,
+            '-ss', f"{start_offset:.2f}",
+            '-i', bg_audio_path,
+            '-filter_complex', filter_complex,
+            '-map', '0:v',
+            '-map', '[aout]',
+            '-c:v', 'copy',
+            '-c:a', 'aac',
+            '-b:a', '192k',
+            '-shortest',
+            output_path
+        ]
+
+        run_ffmpeg_command(cmd)
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            print(f"   🎵 Background audio mixed (clip {clip_index + 1} offset: {start_offset:.1f}s, vol: {vol:.0%})")
+            return output_path
+        return video_path
+    except Exception as e:
+        print(f"   ⚠️ Background audio mixing warning for clip {clip_index + 1}: {e}")
+        return video_path
+
+
+def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=None, subtitle_style=None):
+    """Burns timed, word-highlight subtitles into ``clip_path``.
     """
     if os.environ.get("AUTO_CAPTIONS", "1").strip() == "0":
+        return None
+    chosen_style = subtitle_style or os.environ.get("AUTO_CAPTION_STYLE") or "shorts"
+    if str(chosen_style).lower() in ("none", "off", "0", "false"):
         return None
     if not transcript or not transcript.get('segments'):
         return None  # silent video: nothing to caption
@@ -1082,7 +1172,7 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=
     ass_path = None
     try:
         import subtitles as _subs
-        style = _subs.AUTO_CAPTION_STYLE
+        style = _subs.get_caption_style(chosen_style)
         output_dir = os.path.dirname(clip_path)
         stem = os.path.basename(clip_path)
         generation_id = int(time.time())
@@ -1663,7 +1753,7 @@ def transcribe_video(video_path):
 
     return transcript
 
-def _run_gemini_stage(client, model_name, prompt, schema):
+def _run_gemini_stage(client, model_name, prompt, schema, creative=False):
     """One schema-enforced model call with transient-error backoff.
     Returns (parsed_dict, cost_analysis).
 
@@ -1676,6 +1766,7 @@ def _run_gemini_stage(client, model_name, prompt, schema):
     config = None if use_local else genai_types.GenerateContentConfig(
         response_mime_type="application/json",
         response_schema=schema,
+        temperature=0.7 if creative else 0.1,
     )
     max_attempts = 3
     for attempt in range(1, max_attempts + 1):
@@ -1719,21 +1810,13 @@ def _run_gemini_stage(client, model_name, prompt, schema):
             time.sleep(wait)
 
 
-def _run_stage_split(client, model_name, items, build_prompt, schema, key, costs, label):
-    """Run a Gemini stage over ``items``; on a policy block, bisect.
-
-    Google's prompt filter (PROHIBITED_CONTENT) fires on some COMBINATIONS of
-    transcript windows that pass individually (27-aug-2026: windows 5+6 of a
-    software walkthrough blocked 3/3, each alone fine, all three models).
-    A block is deterministic for a given prompt, so instead of failing the
-    job the batch is split in halves until the offending combination is
-    isolated; a single item that still blocks is dropped with a log line.
-    Returns the merged list found under ``key`` in each response."""
+def _run_stage_split(client, model_name, items, build_prompt, schema, key, costs, label, creative=False):
+    """Run a Gemini stage over ``items``; on a policy block, bisect."""
     if not items:
         return []
     prompt = build_prompt(items)
     try:
-        parsed, cost = _run_gemini_stage(client, model_name, prompt, schema)
+        parsed, cost = _run_gemini_stage(client, model_name, prompt, schema, creative=creative)
         if cost:
             costs.append(cost)
         return list(parsed.get(key) or [])
@@ -1743,8 +1826,8 @@ def _run_stage_split(client, model_name, items, build_prompt, schema, key, costs
             return []
         mid = len(items) // 2
         print(f"   🚫 {label}: Gemini blocked a batch of {len(items)}; retrying as {mid} + {len(items) - mid}")
-        return (_run_stage_split(client, model_name, items[:mid], build_prompt, schema, key, costs, label)
-                + _run_stage_split(client, model_name, items[mid:], build_prompt, schema, key, costs, label))
+        return (_run_stage_split(client, model_name, items[:mid], build_prompt, schema, key, costs, label, creative=creative)
+                + _run_stage_split(client, model_name, items[mid:], build_prompt, schema, key, costs, label, creative=creative))
 
 
 def score_batch_size():
@@ -1759,7 +1842,7 @@ def score_batch_size():
     return 3 if llm_backend.active() else 8
 
 
-def get_viral_clips(transcript_result, video_duration):
+def get_viral_clips(transcript_result, video_duration, creative=False):
     """Two-pass clip selection: score transcript windows, then detail the best.
 
     Windowing gives even coverage on long videos (a single call over the whole
@@ -1819,7 +1902,7 @@ def get_viral_clips(transcript_result, video_duration):
         for b in range(0, len(windows), SCORE_BATCH):
             scored.extend(_run_stage_split(
                 client, model_name, windows[b:b + SCORE_BATCH], _score_prompt,
-                gemini_worker.ScoreResponse, "windows", costs, "score"))
+                gemini_worker.ScoreResponse, "windows", costs, "score", creative=creative))
 
         # Shortlist the top windows; scale with duration so long videos surface
         # more candidates without exploding the detail call.
@@ -1844,7 +1927,7 @@ def get_viral_clips(transcript_result, video_duration):
                 windows_json=json.dumps(_payload(ws), ensure_ascii=False))
 
         shorts = _run_stage_split(client, model_name, shortlist, _detail_prompt,
-                                  gemini_worker.DetailResponse, "shorts", costs, "detail")
+                                  gemini_worker.DetailResponse, "shorts", costs, "detail", creative=creative)
         if len(shorts) > max_clips:
             # By score, never by position: the results arrive in transcript
             # order, so slicing kept the earliest clips and silently dropped
@@ -2065,6 +2148,14 @@ if __name__ == '__main__':
                         help="Output aspect: vertical/auto (9:16), horizontal (keep 16:9), square (1:1).")
     parser.add_argument('--transcript', type=str,
                         help="Path to a precomputed transcript JSON (transcribe_media shape); skips transcription.")
+    parser.add_argument('--bg-audio', type=str, default=None,
+                        help="Path to background audio file to mix softly into generated clips.")
+    parser.add_argument('--bg-audio-volume', type=float, default=0.18,
+                        help="Background audio volume (default 0.18 for low voice / ducked music).")
+    parser.add_argument('--subtitle-style', type=str, default="shorts",
+                        help="Subtitle style preset: shorts, tiktok, reels, beast, gold, neon, cyber, minimal, classic, boxed, or none.")
+    parser.add_argument('--fresh', action='store_true',
+                        help="Force fresh clip analysis, bypassing cached metadata.")
 
     args = parser.parse_args()
     output_format = args.format
@@ -2200,7 +2291,8 @@ if __name__ == '__main__':
         # 4. Gemini Analysis (or reuse existing metadata if already generated)
         metadata_file = os.path.join(output_dir, f"{video_title}_metadata.json")
         clips_data = None
-        if os.path.exists(metadata_file) and os.path.getsize(metadata_file) > 0:
+        bypass_cache = args.fresh or os.environ.get("FORCE_FRESH_CLIPS") == "1"
+        if not bypass_cache and os.path.exists(metadata_file) and os.path.getsize(metadata_file) > 0:
             try:
                 with open(metadata_file, 'r') as f:
                     cached = json.load(f)
@@ -2211,17 +2303,19 @@ if __name__ == '__main__':
                         transcript = cached['transcript']
             except Exception:
                 clips_data = None
+        elif bypass_cache:
+            print("🔄 Fresh clip generation requested — analyzing new viral moments with AI...")
 
         if clips_data is None:
             print("🤖 Analyzing transcript with AI to identify viral moments...", flush=True)
             if transcript is not None:
-                clips_data = get_viral_clips(transcript, duration)
+                clips_data = get_viral_clips(transcript, duration, creative=bypass_cache)
             else:
                 clips_data = get_visual_clips(input_video, duration)
                 # Fall back to transcript if visual analysis returned no clips but speech exists
                 if (not clips_data or 'shorts' not in clips_data) and raw_transcript and raw_transcript.get('segments'):
                     print("⚠️ Vision pass returned no clips — falling back to transcript speech segments.")
-                    clips_data = get_viral_clips(raw_transcript, duration)
+                    clips_data = get_viral_clips(raw_transcript, duration, creative=bypass_cache)
                     transcript = raw_transcript
 
         if not clips_data or 'shorts' not in clips_data:
@@ -2342,12 +2436,31 @@ if __name__ == '__main__':
                         except Exception as hook_err:
                             print(f"   ⚠️ Auto-hook warning for clip {i+1}: {hook_err}")
 
+                    # Mix background audio if provided (different part for every clip with low voice)
+                    bg_audio_file = getattr(args, 'bg_audio', None) or os.environ.get("BG_AUDIO_PATH")
+                    bg_audio_vol = float(getattr(args, 'bg_audio_volume', None) or os.environ.get("BG_AUDIO_VOLUME", "0.18"))
+                    if bg_audio_file and os.path.exists(bg_audio_file):
+                        try:
+                            total_count = len(clips)
+                            mixed_clip = mix_background_audio(
+                                deliver_path, bg_audio_file, clip_index=i,
+                                total_clips=total_count, clip_duration=end - start,
+                                bg_volume=bg_audio_vol
+                            )
+                            if mixed_clip and os.path.exists(mixed_clip) and os.path.getsize(mixed_clip) > 0:
+                                deliver_path = mixed_clip
+                                ensure_file_unlocked(deliver_path, timeout=15)
+                        except Exception as bg_err:
+                            print(f"   ⚠️ Background audio mixing error for clip {i+1}: {bg_err}")
+
                     captioned = None
                     try:
                         import layout_ranges as _layouts
+                        sub_style = getattr(args, 'subtitle_style', None) or os.environ.get("AUTO_CAPTION_STYLE") or "shorts"
                         captioned = auto_caption_clip(
                             deliver_path, transcript, start, end,
-                            split_ranges=_layouts.split_ranges(clip.get('layout_ranges', [])))
+                            split_ranges=_layouts.split_ranges(clip.get('layout_ranges', [])),
+                            subtitle_style=sub_style)
                         if captioned and (not os.path.exists(captioned) or os.path.getsize(captioned) == 0):
                             print(f"   ⚠️ Captions file {captioned} missing or 0 bytes — using uncaptioned base")
                             captioned = None

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Link2, Upload, FileVideo, X, Info, Loader2, ChevronDown } from 'lucide-react';
+import { Link2, Upload, FileVideo, X, Info, Loader2, ChevronDown, Music, Volume2, Sparkles, RefreshCw } from 'lucide-react';
 import { getApiUrl } from '../config';
 
 const SUPPORTED_PLATFORMS = [
@@ -11,8 +11,23 @@ const CLIP_TARGET_PRESETS = [
     { value: '', label: 'Auto' },
     { value: '3', label: '3' },
     { value: '5', label: '5' },
+    { value: '7', label: '7' },
     { value: '10', label: '10' },
-    { value: '15', label: '15' },
+];
+
+const SUBTITLE_STYLE_OPTIONS = [
+    { value: 'shorts', label: 'Shorts Pop (Red Accent / Bold)' },
+    { value: 'tiktok', label: 'TikTok (Cyan & Red Accent)' },
+    { value: 'reels', label: 'Reels (Pink Gradient Accent)' },
+    { value: 'beast', label: 'Beast (Bold Impact Yellow)' },
+    { value: 'gold', label: 'Gold Glow (Warm Glow)' },
+    { value: 'neon', label: 'Neon (Vibrant Green Glow)' },
+    { value: 'cyber', label: 'Cyber (Cyan Glow)' },
+    { value: 'karaoke', label: 'Karaoke (Red Accent)' },
+    { value: 'minimal', label: 'Minimal (Clean White Outline)' },
+    { value: 'boxed', label: 'Boxed (Purple Pill Box)' },
+    { value: 'classic', label: 'Classic (Standard Outline)' },
+    { value: 'none', label: 'None (No Subtitles)' },
 ];
 
 export default function MediaInput({ onProcess, isProcessing }) {
@@ -47,6 +62,15 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [layout, setLayout] = useState(() => {
         try { return localStorage.getItem('os_layout') || 'auto'; } catch { return 'auto'; }
     });
+    // Subtitle Style selection before processing
+    const [subtitleStyle, setSubtitleStyle] = useState(() => {
+        try { return localStorage.getItem('os_subtitle_style') || 'shorts'; } catch { return 'shorts'; }
+    });
+    // Background Audio options
+    const [bgAudioFile, setBgAudioFile] = useState(null);
+    const [bgAudioVolume, setBgAudioVolume] = useState('0.18');
+    // Fresh clip extraction (bypass cache to get new clips)
+    const [freshClips, setFreshClips] = useState(true);
     const infoRef = useRef(null);
 
     // Close the compatibility popover on any outside click.
@@ -97,12 +121,17 @@ export default function MediaInput({ onProcess, isProcessing }) {
             autoHook,
             autoHookStyle,
             layout,
+            subtitleStyle,
+            bgAudio: bgAudioFile || null,
+            bgAudioVolume,
+            freshClips,
         };
         try {
             localStorage.setItem('os_auto_hook', autoHook ? '1' : '0');
             localStorage.setItem('os_auto_hook_style', autoHookStyle);
             localStorage.setItem('os_layout', layout);
             localStorage.setItem('os_scan_zone_count', scanZoneCount || '3');
+            localStorage.setItem('os_subtitle_style', subtitleStyle);
         } catch { /* ignore */ }
         if (mode === 'url' && url) {
             onProcess({ type: 'url', payload: url, acknowledged: true, outputFormat, ...advanced });
@@ -257,6 +286,128 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     </div>
                 </div>
 
+                {/* Number of videos to generate (Presets: Auto, 3, 5, 7, 10) */}
+                <div className="mt-5">
+                    <div className="flex items-center justify-between mb-2">
+                        <p className="eyebrow">Videos to generate</p>
+                        <span className="text-[11px] text-muted">{targetClips ? `${targetClips} clips target` : 'AI Auto-Detect'}</span>
+                    </div>
+                    <div className="grid grid-cols-5 gap-1.5" role="group" aria-label="clips to generate">
+                        {CLIP_TARGET_PRESETS.map((option) => {
+                            const active = targetClips === option.value;
+                            return (
+                                <button
+                                    key={option.label}
+                                    type="button"
+                                    aria-pressed={active}
+                                    onClick={() => setTargetClips(option.value)}
+                                    className={`py-2 rounded-input border text-xs font-mono transition-colors ${active
+                                        ? 'border-[color:var(--color-accent)] text-ink bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] font-semibold'
+                                        : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}`}
+                                >
+                                    {option.label}
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                {/* Subtitle Style Preset */}
+                <div className="mt-5">
+                    <div className="flex items-center justify-between mb-2">
+                        <p className="eyebrow flex items-center gap-1.5">
+                            <Sparkles size={13} className="text-brass" />
+                            Subtitle Style
+                        </p>
+                    </div>
+                    <select
+                        value={subtitleStyle}
+                        onChange={(e) => setSubtitleStyle(e.target.value)}
+                        className="input-field w-full text-xs sm:text-sm py-2"
+                        aria-label="Subtitle Style"
+                    >
+                        {SUBTITLE_STYLE_OPTIONS.map((opt) => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                        ))}
+                    </select>
+                </div>
+
+                {/* Background Audio (BGM) */}
+                <div className="mt-5 p-3.5 rounded-input bg-paper2/50 border border-rule2">
+                    <div className="flex items-center justify-between mb-2">
+                        <label className="flex items-center gap-2 text-xs font-medium text-ink cursor-pointer">
+                            <Music size={14} className="text-brass" />
+                            Background Audio (Low Voice)
+                        </label>
+                        {bgAudioFile && (
+                            <button
+                                type="button"
+                                onClick={() => setBgAudioFile(null)}
+                                className="text-[11px] text-muted hover:text-ink flex items-center gap-1 transition-colors"
+                            >
+                                <X size={12} /> Remove
+                            </button>
+                        )}
+                    </div>
+                    {bgAudioFile ? (
+                        <div className="space-y-3">
+                            <div className="flex items-center gap-2 text-xs bg-paper3 p-2 rounded border border-rule truncate">
+                                <Music size={14} className="text-brass shrink-0" />
+                                <span className="truncate flex-1 font-mono text-[11px]">{bgAudioFile.name}</span>
+                                <span className="text-muted text-[10px] shrink-0">{(bgAudioFile.size / 1024 / 1024).toFixed(1)} MB</span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                                <div className="flex items-center gap-1.5 text-muted shrink-0 text-xs">
+                                    <Volume2 size={13} className="text-brass" />
+                                    <span>Low Voice:</span>
+                                </div>
+                                <input
+                                    type="range"
+                                    min="0.05"
+                                    max="0.40"
+                                    step="0.01"
+                                    value={bgAudioVolume}
+                                    onChange={(e) => setBgAudioVolume(e.target.value)}
+                                    className="flex-1 accent-[var(--color-accent)] h-1.5 bg-paper3 rounded-lg cursor-pointer"
+                                />
+                                <span className="font-mono text-[11px] text-ink2 w-9 text-right">{Math.round(parseFloat(bgAudioVolume) * 100)}%</span>
+                            </div>
+                            <p className="text-[11px] text-muted leading-tight">
+                                Intelligently sliced: each generated video gets a different part of this audio softly mixed in background with smooth fade-in/out.
+                            </p>
+                        </div>
+                    ) : (
+                        <label className="flex items-center justify-center gap-2 py-2.5 px-3 border border-dashed border-rule2 hover:border-brass rounded cursor-pointer transition-colors text-xs text-muted hover:text-ink2">
+                            <input
+                                type="file"
+                                accept="audio/*"
+                                onChange={(e) => {
+                                    if (e.target.files && e.target.files[0]) {
+                                        setBgAudioFile(e.target.files[0]);
+                                    }
+                                }}
+                                className="hidden"
+                            />
+                            <Music size={13} className="text-brass" />
+                            <span>Add background audio file (MP3, WAV, M4A)</span>
+                        </label>
+                    )}
+                </div>
+
+                {/* Fresh Clips Toggle */}
+                <div className="mt-4 flex items-center justify-between">
+                    <label className="flex items-center gap-2 text-xs text-ink2 cursor-pointer select-none">
+                        <input
+                            type="checkbox"
+                            checked={freshClips}
+                            onChange={(e) => setFreshClips(e.target.checked)}
+                            className="w-4 h-4 shrink-0 accent-[var(--color-accent)] cursor-pointer"
+                        />
+                        <RefreshCw size={13} className="text-brass" />
+                        <span>Generate new & fresh clips every time (different moments)</span>
+                    </label>
+                </div>
+
                 {/* Advanced generation controls — collapsed by default; blank = AI decides */}
                 <div className="mt-4">
                     <button
@@ -266,7 +417,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     >
                         <ChevronDown size={14} className={`transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />
                         advanced options
-                        {(targetClips || clipMinSeconds || clipMaxSeconds || scanZoneCount !== '3' || !autoHook) && (
+                        {(clipMinSeconds || clipMaxSeconds || scanZoneCount !== '3' || !autoHook) && (
                             <span className="text-brass">·</span>
                         )}
                     </button>
@@ -275,32 +426,14 @@ export default function MediaInput({ onProcess, isProcessing }) {
                            ~100px each, which crushes both label and value. */
                         <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-2 animate-fade">
                             <div>
-                                <p className="eyebrow mb-1.5">clips to aim for</p>
-                                <div className="grid grid-cols-5 gap-1.5" role="group" aria-label="clips to aim for">
-                                    {CLIP_TARGET_PRESETS.map((option) => {
-                                        const active = targetClips === option.value;
-                                        return (
-                                            <button
-                                                key={option.label}
-                                                type="button"
-                                                aria-pressed={active}
-                                                onClick={() => setTargetClips(option.value)}
-                                                className={`py-2 rounded-input border text-xs transition-colors ${active
-                                                    ? 'border-[color:var(--color-accent)] text-ink bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)]'
-                                                    : 'border-rule2 text-muted hover:border-[color:var(--color-accent)]'}`}
-                                            >
-                                                {option.label}
-                                            </button>
-                                        );
-                                    })}
-                                </div>
+                                <p className="eyebrow mb-1.5">custom clip target</p>
                                 <input
                                     type="number" min="1" max="15" step="1"
                                     value={targetClips}
                                     onChange={(e) => setTargetClips(e.target.value)}
                                     placeholder="custom (1–15)"
                                     aria-label="custom clip count"
-                                    className="input-field mt-1.5"
+                                    className="input-field"
                                 />
                             </div>
                             <div>
