@@ -21,10 +21,11 @@ const SIZE_SCALE: Record<string, number> = {
 };
 
 // Permanent Viral Hook Positioning: Anchor the initial hook headline permanently
-// in the dedicated safe margin strictly within the top safe zone (Y: 5%–12%), so it never overlays
+// in the dedicated safe margin strictly above the subject (Y: 2.5%–4%), so it never overlays
 // speaker faces, eyes, or lower subtitles.
 const POSITION_STYLE: Record<string, React.CSSProperties> = {
-  top: { top: "7%", bottom: "auto" },
+  top: { top: "2.5%", bottom: "auto" },
+  safe_top: { top: "5%", bottom: "auto" },
   center: { top: "50%", bottom: "auto", transform: "translateY(-50%)" },
   bottom: { top: "78%", bottom: "auto" },
 };

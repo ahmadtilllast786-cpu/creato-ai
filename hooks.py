@@ -1,9 +1,18 @@
 import os
+import sys
 import re
 import textwrap
 import subprocess
 import urllib.request
 import uuid
+
+try:
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+except Exception:
+    pass
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 from ffmpeg_utils import (video_encode_args, QUALITY, METADATA_SCRUB, safe_remove,
@@ -241,17 +250,17 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
     has_box = box_fill[3] > 0
     draw_shadow = look["shadow"]
     
-    # Configuration
-    padding_x = 30 # Balanced padding
-    padding_y = 25 
-    line_spacing = 20 # Increased spacing
-    cornerradius = 20
-    shadow_offset = (5, 5) 
-    shadow_blur = 10
-    shadow_padding = 20  # Consistent padding for shadow/box boundaries
+    # Configuration - sleek and compact so it sits cleanly above video without excess padding
+    padding_x = 24
+    padding_y = 16
+    line_spacing = 12
+    cornerradius = 16
+    shadow_offset = (3, 3) 
+    shadow_blur = 8
+    shadow_padding = 10  # Consistent padding for shadow/box boundaries
     
-    # Font Size Calculation (approx 5% of width - tuned to match Noto Serif Bold metrics in browser)
-    base_font_size = int(target_width * 0.05)
+    # Font Size Calculation (approx 4.6% of width for clean headline proportionality)
+    base_font_size = int(target_width * 0.046)
     font_size = int(base_font_size * font_scale)
     
     try:
@@ -437,10 +446,11 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
         overlay_x = (video_width - box_w) // 2
         
         # Permanent Viral Hook Positioning: Anchor the initial hook headline permanently
-        # in the dedicated safe margin strictly within the top safe zone (Y: 5%–12%), so it never overlays
-        # speaker faces or lower subtitles.
+        # in the dedicated safe margin strictly above the subject (Y: 2.5%–4%), so it never overlays
+        # speaker faces, hair, or lower subtitles.
         POSITION_MAP = {
-            "top": int(video_height * 0.07),
+            "top": max(16, int(video_height * 0.025)),
+            "safe_top": max(32, int(video_height * 0.05)),
             "center": (video_height - box_h) // 2,
             "bottom": int(video_height * 0.78),
         }
@@ -452,14 +462,29 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
         overlay_y = POSITION_MAP[position]
         
         # 4. FFmpeg Command
-        print(f"🎬 Overlaying hook: '{text}' at {overlay_x},{overlay_y}")
+        # If duration is 0, None, 'forever', or 'full', overlay persists till the end of the video!
+        is_forever = (
+            duration is None
+            or str(duration).strip().lower() in ("0", "none", "forever", "full", "whole", "")
+        )
+        dur_float = 0.0
+        try:
+            if duration is not None:
+                dur_float = float(duration)
+                if dur_float <= 0:
+                    is_forever = True
+        except (TypeError, ValueError):
+            is_forever = True
+
+        enable_filter = "" if is_forever else f":enable='between(t,0,{dur_float:.2f})'"
+
+        print(f"🎬 Overlaying hook: '{text}' at {overlay_x},{overlay_y} ({'forever (until end)' if is_forever else f'{dur_float:.1f}s'})")
         
         ffmpeg_cmd = [
             'ffmpeg', '-y',
             '-i', video_path,
             '-i', img_path,
-            '-filter_complex', f"[0:v][1:v]overlay={overlay_x}:{overlay_y}"
-                + (f":enable='between(t,0,{float(duration)})'" if duration and float(duration) > 0 else ""),
+            '-filter_complex', f"[0:v][1:v]overlay={overlay_x}:{overlay_y}{enable_filter}",
             '-c:a', 'copy',
             *video_encode_args(QUALITY),
             *METADATA_SCRUB,

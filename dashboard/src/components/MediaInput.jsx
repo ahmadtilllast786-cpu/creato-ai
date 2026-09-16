@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Link2, Upload, FileVideo, X, Info, Loader2, ChevronDown, Music, Volume2, Sparkles, RefreshCw } from 'lucide-react';
+import { Link2, Upload, FileVideo, X, Info, Loader2, ChevronDown, Music, Volume2, Sparkles, RefreshCw, Wand2 } from 'lucide-react';
 import { getApiUrl } from '../config';
 
 const SUPPORTED_PLATFORMS = [
@@ -30,6 +30,36 @@ const SUBTITLE_STYLE_OPTIONS = [
     { value: 'none', label: 'None (No Subtitles)' },
 ];
 
+const HOOK_STYLE_OPTIONS = [
+    { value: 'yellow', label: 'Viral Yellow (TikTok / Reels Punchy Box)' },
+    { value: 'classic', label: 'Black & White Card (Sleek Classic)' },
+    { value: 'neon', label: 'Cyber Neon (Cyan Glow on Dark)' },
+    { value: 'emerald', label: 'Tech Emerald (Deep Green & Mint)' },
+    { value: 'red', label: 'Breaking Red (Urgent News Box)' },
+    { value: 'purple', label: 'Violet Glow (Royal Purple Box)' },
+    { value: 'orange', label: 'Sunset Orange (Warm Sunset Card)' },
+    { value: 'white_card', label: 'White Card (Black on White)' },
+    { value: 'pill', label: 'Minimal Pill (Translucent Slate Pill)' },
+    { value: 'breaking_news', label: 'News Banner (Crimson & Yellow)' },
+    { value: 'outline', label: 'White Outline (No Box, MrBeast Style)' },
+    { value: 'outline_yellow', label: 'Yellow Outline (No Box, Bold Yellow)' },
+    { value: 'dark', label: 'Dark Sleek (Subtle Dark Card)' },
+];
+
+const HOOK_DURATION_OPTIONS = [
+    { value: 'forever', label: 'Whole Video (Until End - Recommended)' },
+    { value: '5', label: 'First 5 Seconds' },
+    { value: '8', label: 'First 8 Seconds' },
+    { value: '10', label: 'First 10 Seconds' },
+];
+
+const HOOK_POSITION_OPTIONS = [
+    { value: 'top', label: 'Top (Above Video - No Overlap)' },
+    { value: 'safe_top', label: 'Top Safe Zone (Slight Margin)' },
+    { value: 'center', label: 'Center' },
+    { value: 'bottom', label: 'Bottom' },
+];
+
 export default function MediaInput({ onProcess, isProcessing }) {
     const [youtubeUrlEnabled, setYoutubeUrlEnabled] = useState(true);
     // File upload is the primary path; the link is secondary.
@@ -54,7 +84,13 @@ export default function MediaInput({ onProcess, isProcessing }) {
         try { return localStorage.getItem('os_auto_hook') !== '0'; } catch { return true; }
     });
     const [autoHookStyle, setAutoHookStyle] = useState(() => {
-        try { return localStorage.getItem('os_auto_hook_style') || 'classic'; } catch { return 'classic'; }
+        try { return localStorage.getItem('os_auto_hook_style') || 'yellow'; } catch { return 'yellow'; }
+    });
+    const [autoHookDuration, setAutoHookDuration] = useState(() => {
+        try { return localStorage.getItem('os_auto_hook_duration') || 'forever'; } catch { return 'forever'; }
+    });
+    const [autoHookPosition, setAutoHookPosition] = useState(() => {
+        try { return localStorage.getItem('os_auto_hook_position') || 'top'; } catch { return 'top'; }
     });
     // Layout: 'auto' lets the AI pick per video (server default); the others
     // force one on so a podcast host who knows what they uploaded doesn't
@@ -120,6 +156,8 @@ export default function MediaInput({ onProcess, isProcessing }) {
             trackScanZones: scanZoneCount || null,
             autoHook,
             autoHookStyle,
+            autoHookDuration,
+            autoHookPosition,
             layout,
             subtitleStyle,
             bgAudio: bgAudioFile || null,
@@ -129,6 +167,8 @@ export default function MediaInput({ onProcess, isProcessing }) {
         try {
             localStorage.setItem('os_auto_hook', autoHook ? '1' : '0');
             localStorage.setItem('os_auto_hook_style', autoHookStyle);
+            localStorage.setItem('os_auto_hook_duration', autoHookDuration);
+            localStorage.setItem('os_auto_hook_position', autoHookPosition);
             localStorage.setItem('os_layout', layout);
             localStorage.setItem('os_scan_zone_count', scanZoneCount || '3');
             localStorage.setItem('os_subtitle_style', subtitleStyle);
@@ -332,6 +372,78 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     </select>
                 </div>
 
+                {/* Viral Hook Headline & Visual Style Options */}
+                <div className="mt-5 p-3.5 rounded-input bg-paper2/40 border border-rule2">
+                    <div className="flex items-center justify-between mb-2.5">
+                        <label className="flex items-center gap-2 text-xs font-medium text-ink cursor-pointer select-none">
+                            <input
+                                type="checkbox"
+                                checked={autoHook}
+                                onChange={(e) => setAutoHook(e.target.checked)}
+                                className="w-4 h-4 shrink-0 accent-[var(--color-accent)] cursor-pointer"
+                            />
+                            <Wand2 size={14} className="text-brass" />
+                            <span>Burn Viral Hook Headline on Clips</span>
+                        </label>
+                        {autoHook && (
+                            <span className="text-[10px] text-brass uppercase font-mono px-1.5 py-0.5 rounded bg-brass/10 border border-brass/20">Active</span>
+                        )}
+                    </div>
+
+                    {autoHook && (
+                        <div className="space-y-3 pt-2.5 border-t border-rule animate-fade">
+                            <div>
+                                <div className="flex items-center justify-between mb-1.5">
+                                    <p className="eyebrow">Hook Visual Style</p>
+                                    <span className="text-[11px] text-muted">13 viral styles</span>
+                                </div>
+                                <select
+                                    value={autoHookStyle}
+                                    onChange={(e) => setAutoHookStyle(e.target.value)}
+                                    className="input-field w-full text-xs sm:text-sm py-2"
+                                    aria-label="Hook Visual Style"
+                                >
+                                    {HOOK_STYLE_OPTIONS.map((opt) => (
+                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                <div>
+                                    <p className="eyebrow mb-1.5">Hook Duration</p>
+                                    <select
+                                        value={autoHookDuration}
+                                        onChange={(e) => setAutoHookDuration(e.target.value)}
+                                        className="input-field w-full text-xs py-1.5"
+                                        aria-label="Hook Duration"
+                                    >
+                                        {HOOK_DURATION_OPTIONS.map((opt) => (
+                                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <p className="eyebrow mb-1.5">Hook Position</p>
+                                    <select
+                                        value={autoHookPosition}
+                                        onChange={(e) => setAutoHookPosition(e.target.value)}
+                                        className="input-field w-full text-xs py-1.5"
+                                        aria-label="Hook Position"
+                                    >
+                                        {HOOK_POSITION_OPTIONS.map((opt) => (
+                                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
+                            <p className="text-[11px] text-muted leading-tight">
+                                Placed safely above the video subject so it stays until video end without covering faces or eyes.
+                            </p>
+                        </div>
+                    )}
+                </div>
+
                 {/* Background Audio (BGM) */}
                 <div className="mt-5 p-3.5 rounded-input bg-paper2/50 border border-rule2">
                     <div className="flex items-center justify-between mb-2">
@@ -489,32 +601,6 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                         <option key={count} value={String(count)}>{count} bands</option>
                                     ))}
                                 </select>
-                            </div>
-                            <div className="col-span-1 sm:col-span-3 flex flex-wrap items-center justify-between gap-3 pt-3 sm:pt-1 border-t border-rule">
-                                <label className="flex items-center gap-2 text-xs text-ink2 cursor-pointer select-none">
-                                    <input
-                                        type="checkbox"
-                                        checked={autoHook}
-                                        onChange={(e) => setAutoHook(e.target.checked)}
-                                        className="w-4 h-4 shrink-0 accent-[var(--color-accent)] cursor-pointer"
-                                    />
-                                    auto hook titles on clips
-                                </label>
-                                {autoHook && (
-                                    <select
-                                        value={autoHookStyle}
-                                        onChange={(e) => setAutoHookStyle(e.target.value)}
-                                        className="input-field !w-auto text-xs py-1.5"
-                                    >
-                                        <option value="classic">Black & White (Default)</option>
-                                        <option value="dark">Dark</option>
-                                        <option value="white_card">White Card</option>
-                                        <option value="yellow">Yellow</option>
-                                        <option value="red">Red</option>
-                                        <option value="outline">Outline</option>
-                                        <option value="outline_yellow">Outline+</option>
-                                    </select>
-                                )}
                             </div>
                         </div>
                     )}

@@ -1569,10 +1569,10 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                             />
                             {/* Platform Safe Zone Collision Mask & Alignment Guides */}
                             <PlatformSafeZoneOverlay platform={platformSafeZone} showGuides={showGuides} />
-                            {/* Persistent Viral Hook Overlay Layer: Full video duration, top safe margin Y: 5%-12% */}
+                            {/* Persistent Viral Hook Overlay Layer: Full video duration, top safe margin Y: 2.5%-8% */}
                             {hookOverlayTrack && (
                                 <div
-                                    className="absolute inset-x-0 top-[7%] px-4 z-20 pointer-events-none flex justify-center text-center transition-all select-none"
+                                    className="absolute inset-x-0 top-[2.5%] px-4 z-20 pointer-events-none flex justify-center text-center transition-all select-none"
                                     style={{ zIndex: 20 }}
                                 >
                                     <div className="max-w-[90%] bg-black/85 backdrop-blur-sm px-3.5 py-1.5 rounded-xl border border-white/20 shadow-xl text-center">

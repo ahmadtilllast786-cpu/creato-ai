@@ -2345,6 +2345,8 @@ async def process_endpoint(
     track_scan_zones: Optional[str] = Form(None),
     auto_hook: Optional[str] = Form(None),
     auto_hook_style: Optional[str] = Form(None),
+    auto_hook_duration: Optional[str] = Form(None),
+    auto_hook_position: Optional[str] = Form(None),
     thumbnail_session_id: Optional[str] = Form(None),
     captions: Optional[str] = Form(None),
     upload_id: Optional[str] = Form(None),
@@ -2384,6 +2386,8 @@ async def process_endpoint(
         track_scan_zones = body.get("track_scan_zones")
         auto_hook = body.get("auto_hook")
         auto_hook_style = body.get("auto_hook_style")
+        auto_hook_duration = body.get("auto_hook_duration") or auto_hook_duration
+        auto_hook_position = body.get("auto_hook_position") or auto_hook_position
         thumbnail_session_id = body.get("thumbnail_session_id")
         captions = body.get("captions")
         upload_id = body.get("upload_id")
@@ -2518,7 +2522,21 @@ async def process_endpoint(
         from hooks import HOOK_STYLES
         if auto_hook_style in HOOK_STYLES:
             env["AUTO_HOOK_STYLE"] = auto_hook_style
-        print(f"[auto-hook] job={job_id} style={env.get('AUTO_HOOK_STYLE', 'classic')}")
+        else:
+            env["AUTO_HOOK_STYLE"] = "yellow" if auto_hook_style == "yellow" else "classic"
+
+        # User request: hook duration until end of video (default "forever")
+        dur_str = str(auto_hook_duration or "forever").strip().lower()
+        if dur_str in ("forever", "full", "0", "whole", "none"):
+            env["AUTO_HOOK_SECONDS"] = "0"
+        else:
+            try:
+                env["AUTO_HOOK_SECONDS"] = str(float(dur_str))
+            except ValueError:
+                env["AUTO_HOOK_SECONDS"] = "0"
+
+        env["AUTO_HOOK_POSITION"] = auto_hook_position or "top"
+        print(f"[auto-hook] job={job_id} style={env.get('AUTO_HOOK_STYLE')} duration={dur_str} pos={env.get('AUTO_HOOK_POSITION')}")
 
     # Manual generation controls (discussion #65): optional clip-count target
     # and duration band, forwarded to the selection prompts via the same env

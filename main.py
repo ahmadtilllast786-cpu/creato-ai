@@ -1249,10 +1249,20 @@ def auto_hook_clip(clip_path, clip):
     if not text:
         return None
     style = os.environ.get("AUTO_HOOK_STYLE", "classic")
-    try:
-        seconds = float(os.environ.get("AUTO_HOOK_SECONDS", "5"))
-    except ValueError:
-        seconds = 5.0
+    # User request: hook should remain over video till video end by default!
+    # If AUTO_HOOK_SECONDS is "0", "forever", "full", "whole", or empty, duration is None (until video ends)
+    raw_seconds = os.environ.get("AUTO_HOOK_SECONDS", "0").strip().lower()
+    if raw_seconds in ("0", "none", "forever", "full", "whole", ""):
+        seconds = None
+    else:
+        try:
+            seconds = float(raw_seconds)
+            if seconds <= 0:
+                seconds = None
+        except ValueError:
+            seconds = None
+
+    pos = os.environ.get("AUTO_HOOK_POSITION", "top").strip().lower()
     try:
         from hooks import add_hook_to_video, HOOK_STYLES
         if style not in HOOK_STYLES:
@@ -1260,10 +1270,11 @@ def auto_hook_clip(clip_path, clip):
         output_dir = os.path.dirname(clip_path)
         out_path = os.path.join(
             output_dir, f"hooked_{int(time.time())}_{os.path.basename(clip_path)}")
-        add_hook_to_video(clip_path, text, out_path, position="top",
+        add_hook_to_video(clip_path, text, out_path, position=pos,
                           duration=seconds, style=style)
-        print(f"   🪝 Hook burned ({style}, {seconds:g}s): {text}")
-        return out_path, {"text": text, "style": style, "position": "top",
+        dur_label = "until video end" if seconds is None else f"{seconds:g}s"
+        print(f"   🪝 Hook burned ({style}, {dur_label}, pos={pos}): {text}")
+        return out_path, {"text": text, "style": style, "position": pos,
                           "duration_seconds": seconds}
     except Exception as e:
         print(f"   ⚠️ Auto-hook failed ({type(e).__name__}: {e}) — "
