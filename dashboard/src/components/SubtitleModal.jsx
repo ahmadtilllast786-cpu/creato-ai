@@ -6,6 +6,7 @@ import RemotionPreview from './RemotionPreview';
 import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
 import { ActivePlaybackController } from '../lib/activePlayback';
+import PlatformSafeZoneOverlay, { PlatformSafeZoneControls } from './PlatformSafeZoneOverlay';
 
 const COLLISION_OPTIONS = [
     { value: 'smart_reposition', label: 'smart safe' },
@@ -122,6 +123,8 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
     const [durationSec, setDurationSec] = useState(30);
     const [captionsLoading, setCaptionsLoading] = useState(false);
     const [useRemotionPreview, setUseRemotionPreview] = useState(false);
+    const [platformSafeZone, setPlatformSafeZone] = useState('off');
+    const [showGuides, setShowGuides] = useState(false);
 
     // Snapshot of applied settings for clean cancel/restore
     const appliedSnapshotRef = useRef(null);
@@ -468,6 +471,19 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
             <div className="flex flex-col md:flex-row gap-6">
                 {/* Left: Preview */}
                 <div className="flex-1 flex flex-col items-center justify-center bg-black rounded-card border border-rule overflow-hidden relative aspect-[9/16] max-h-[580px]">
+                    {/* Platform Safe Zone & Guides Toolbar */}
+                    <div className="absolute top-2 z-30">
+                        <PlatformSafeZoneControls
+                            platform={platformSafeZone}
+                            onPlatformChange={setPlatformSafeZone}
+                            showGuides={showGuides}
+                            onToggleGuides={setShowGuides}
+                        />
+                    </div>
+
+                    {/* Platform Safe Zone Collision Mask & Alignment Guides */}
+                    <PlatformSafeZoneOverlay platform={platformSafeZone} showGuides={showGuides} />
+
                     {captionsLoading ? (
                         <div className="flex items-center gap-2 text-muted">
                             <Loader2 size={16} className="animate-spin" />

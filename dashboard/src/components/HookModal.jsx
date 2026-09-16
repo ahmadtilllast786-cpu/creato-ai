@@ -5,6 +5,7 @@ import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
 import { ActivePlaybackController } from '../lib/activePlayback';
 import InspectorActionBar from './ui/InspectorActionBar';
+import PlatformSafeZoneOverlay, { PlatformSafeZoneControls } from './PlatformSafeZoneOverlay';
 
 const ENTRANCE_OPTIONS = [
     { value: 'spring', label: 'Bounce' },
@@ -88,6 +89,8 @@ export default function HookModal({
     const prefs = loadHookPrefs();
     const [text, setText] = useState(initialText || 'POV: You are using the viral hook feature');
     const [position, setPosition] = useState(prefs.position || 'top'); // default top above video
+    const [platformSafeZone, setPlatformSafeZone] = useState('off');
+    const [showGuides, setShowGuides] = useState(false);
     const [size, setSize] = useState(prefs.size || 'M');
     const [style, setStyle] = useState(prefs.style || 'classic');
     const [entranceAnimation, setEntranceAnimation] = useState(prefs.entranceAnimation || 'spring');
@@ -202,6 +205,19 @@ export default function HookModal({
             <div className="flex flex-col md:flex-row gap-6">
                 {/* Left: Live Preview */}
                 <div className="flex-1 flex flex-col items-center justify-center bg-black rounded-card border border-rule overflow-hidden relative aspect-[9/16] max-h-[600px]">
+                    {/* Platform Safe Zone & Guides Toolbar */}
+                    <div className="absolute top-2 z-30">
+                        <PlatformSafeZoneControls
+                            platform={platformSafeZone}
+                            onPlatformChange={setPlatformSafeZone}
+                            showGuides={showGuides}
+                            onToggleGuides={setShowGuides}
+                        />
+                    </div>
+
+                    {/* Platform Safe Zone Collision Mask & Alignment Guides */}
+                    <PlatformSafeZoneOverlay platform={platformSafeZone} showGuides={showGuides} />
+
                     {useRemotionPreview ? (
                         <RemotionPreview
                             videoUrl={videoUrl}

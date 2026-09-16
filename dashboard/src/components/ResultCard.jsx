@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp, RotateCcw } from 'lucide-react';
+import { Download, Share2, Instagram, Youtube, Video, AlertCircle, Loader2, Copy, Check, Wand2, Type, Calendar, Languages, FileText, Link2, Scissors, Crosshair, TrendingUp, RotateCcw, Grid } from 'lucide-react';
 import { getApiUrl } from '../config';
 import { apiFetch } from '../lib/api';
 import SubtitleModal from './SubtitleModal';
@@ -9,6 +9,7 @@ import Modal from './ui/Modal';
 import SegmentedControl from './ui/SegmentedControl';
 import WatermarkModal, { watermarkNoticeDismissed } from './WatermarkModal';
 import TikTokDraftNotice from './TikTokDraftNotice';
+import PlatformSafeZoneOverlay from './PlatformSafeZoneOverlay';
 import { useAuth } from '../contexts/AuthContext';
 import { renderInBrowser } from '../lib/renderInBrowser';
 import { ActivePlaybackController } from '../lib/activePlayback';
@@ -43,6 +44,20 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
     const [showDescModal, setShowDescModal] = useState(false);
     const [showSubtitleModal, setShowSubtitleModal] = useState(false);
     const [showWatermarkModal, setShowWatermarkModal] = useState(false);
+    const [safeZonePlatform, setSafeZonePlatform] = useState('off');
+    const [showGuides, setShowGuides] = useState(false);
+
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            if (['INPUT', 'TEXTAREA'].includes(e.target?.tagName)) return;
+            if (e.key === 'g' || e.key === 'G') {
+                setShowGuides((prev) => !prev);
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, []);
+
     const { plan } = useAuth();
     const videoRef = React.useRef(null);
     // Pristine base clip (no burned subtitles/hook), stable regardless of how
@@ -881,6 +896,32 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
                         }
                     }}
                 />
+                {/* Platform Safe Zone Collision Mask & Alignment Guides */}
+                <PlatformSafeZoneOverlay platform={safeZonePlatform} showGuides={showGuides} />
+
+                {/* Safe Zone & Alignment Guides Quick Controls */}
+                <div className="absolute top-3 right-3 z-30 flex items-center gap-1 opacity-80 hover:opacity-100 transition-opacity">
+                    <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); setShowGuides((g) => !g); }}
+                        className={`p-1 rounded-full text-xs transition-colors ${showGuides ? 'bg-cyan-500 text-white shadow' : 'bg-black/70 text-white/80 hover:text-white hover:bg-black/90'}`}
+                        title="Toggle Alignment Guides (Rule of Thirds & Eye-Trace, Key: G)"
+                    >
+                        <Grid size={12} />
+                    </button>
+                    <select
+                        value={safeZonePlatform}
+                        onChange={(e) => { e.stopPropagation(); setSafeZonePlatform(e.target.value); }}
+                        className="bg-black/70 hover:bg-black/90 text-white text-[10px] font-mono px-1.5 py-1 rounded-full border border-white/20 focus:outline-none cursor-pointer"
+                        title="Platform UI Collision Mask"
+                    >
+                        <option value="off">Mask: Off</option>
+                        <option value="tiktok">TikTok</option>
+                        <option value="instagram">Reels</option>
+                        <option value="youtube">Shorts</option>
+                    </select>
+                </div>
+
                 <div className="absolute top-3 left-3 flex gap-2">
                     {/* Stays the clip's own number, not its rank: the cards are
                         ordered by score, but this is what the downloaded file

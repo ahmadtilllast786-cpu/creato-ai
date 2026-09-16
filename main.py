@@ -522,9 +522,23 @@ def detect_face_candidates(frame):
         w = int(bboxC.width * width)
         h = int(bboxC.height * height)
         
+        # Extract eye keypoints for gaze / focal anchoring
+        eye_mid_x = float(x + w / 2.0)
+        eye_mid_y = float(y + h * 0.35)
+        try:
+            re = mp_face_detection.get_key_point(detection, mp_face_detection.FaceKeyPoint.RIGHT_EYE)
+            le = mp_face_detection.get_key_point(detection, mp_face_detection.FaceKeyPoint.LEFT_EYE)
+            if re and le:
+                eye_mid_x = float((re.x + le.x) / 2.0) * width
+                eye_mid_y = float((re.y + le.y) / 2.0) * height
+        except Exception:
+            pass
+
         candidates.append({
             'box': [x, y, w, h],
-            'score': w * h # Area as score
+            'score': w * h, # Area as score
+            'eye_line': [round(eye_mid_x, 2), round(eye_mid_y, 2)],
+            'focal_anchor': [round(eye_mid_x, 2), round(eye_mid_y, 2)],
         })
             
     return candidates

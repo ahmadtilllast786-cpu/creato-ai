@@ -7,6 +7,7 @@ import { getApiUrl } from '../config';
 import { apiJson } from '../lib/api';
 import { ASPECT_RATIOS, FRAMING_MODES } from '../lib/subjectTracker';
 import TrackingOverlayCanvas from './TrackingOverlayCanvas';
+import PlatformSafeZoneOverlay, { PlatformSafeZoneControls } from './PlatformSafeZoneOverlay';
 
 // Manual reframing & Multi-Person Auto-Reframe Engine:
 // Controls 3-layer visual overlays, dynamic aspect ratio fitting (9:16, 1:1, 4:5, 16:9),
@@ -25,6 +26,8 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
     const [overrides, setOverrides] = useState({});   // idx -> number | {top,bottom}
     const [playing, setPlaying] = useState(null);     // scene index being played
     const [saving, setSaving] = useState(false);
+    const [platformSafeZone, setPlatformSafeZone] = useState('off');
+    const [showGuides, setShowGuides] = useState(false);
 
     // Multi-Person & Reframe Control State
     const [aspectRatio, setAspectRatio] = useState('9:16');
@@ -281,6 +284,14 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
                             </button>
                         ))}
                     </div>
+
+                    {/* Platform Safe Zone & Visual Alignment Guides */}
+                    <PlatformSafeZoneControls
+                        platform={platformSafeZone}
+                        onPlatformChange={setPlatformSafeZone}
+                        showGuides={showGuides}
+                        onToggleGuides={setShowGuides}
+                    />
                 </div>
 
                 <div className="flex-1 overflow-y-auto overscroll-contain custom-scrollbar p-4 space-y-5">
@@ -312,6 +323,8 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
                             widthFraction={activeWidthFraction}
                             aspectRatio={aspectRatio}
                             showOverlays={showTrackingOverlays}
+                            platformSafeZone={platformSafeZone}
+                            showGuides={showGuides}
                             previewUrl={data.preview_url}
                             touched={scene.index in overrides}
                             playing={playing === scene.index}
@@ -350,6 +363,7 @@ export default function ReframeEditor({ jobId, clipIndex, clipTitle, onClose, on
 }
 
 function SceneRow({ scene, value, widthFraction, aspectRatio, showOverlays, previewUrl, touched, playing,
+                    platformSafeZone = 'off', showGuides = false,
                     onPlayToggle, onMoveSingle, onMoveHalf, onToggleSplit, onAutoSplit, onReset }) {
     const boxRef = useRef(null);
     const videoRef = useRef(null);
@@ -413,14 +427,16 @@ function SceneRow({ scene, value, widthFraction, aspectRatio, showOverlays, prev
                 key={which}
                 onMouseDown={startDrag(which)}
                 onTouchStart={startDrag(which)}
-                className="absolute inset-y-0 border-2 border-brass cursor-ew-resize z-20"
+                className="absolute inset-y-0 border-2 border-brass cursor-ew-resize z-20 overflow-hidden"
                 style={{ left: `${leftPct}%`, width: `${widthFraction * 100}%` }}
             >
                 {label && (
-                    <span className="absolute top-1 left-1 text-[10px] px-1 rounded bg-brass text-paper lowercase font-mono">
+                    <span className="absolute top-1 left-1 text-[10px] px-1 rounded bg-brass text-paper lowercase font-mono z-30">
                         {label}
                     </span>
                 )}
+                {/* Platform Safe Zone & Visual Alignment Guides Overlay */}
+                <PlatformSafeZoneOverlay platform={platformSafeZone} showGuides={showGuides} />
             </div>
         );
     };

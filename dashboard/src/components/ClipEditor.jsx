@@ -9,6 +9,7 @@ import { apiFetch, apiJson, QuotaError } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import { ActivePlaybackController } from '../lib/activePlayback';
 import InspectorActionBar from './ui/InspectorActionBar';
+import PlatformSafeZoneOverlay, { PlatformSafeZoneControls } from './PlatformSafeZoneOverlay';
 
 // Full-screen clip editor: shows WHICH source segments a clip was cut from,
 // lets the user trim/extend/split/reorder them (word-snapped), and re-renders
@@ -143,6 +144,8 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
 
     // Active tool inspector tab: 'cuts' | 'captions' | 'effects' | 'audio'
     const [activeInspectorTab, setActiveInspectorTab] = useState('cuts');
+    const [platformSafeZone, setPlatformSafeZone] = useState('off');
+    const [showGuides, setShowGuides] = useState(false);
 
     // ─── Transactional Feature Inspectors State Buffers ─────────────
     // 1. Captions Inspector Staging Buffer (Two-Tier Staging State Pattern)
@@ -1530,7 +1533,15 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                     the clip track its full precision back. */}
                 <div className={`flex flex-col min-h-0 gap-2 ${sourceOpen ? 'xl:w-[26rem] 2xl:w-[30rem] xl:shrink-0' : 'flex-1'}`}>
                     <div className="flex items-center justify-between gap-2 shrink-0">
-                        <p className="eyebrow">Program</p>
+                        <div className="flex items-center gap-2">
+                            <p className="eyebrow">Program</p>
+                            <PlatformSafeZoneControls
+                                platform={platformSafeZone}
+                                onPlatformChange={setPlatformSafeZone}
+                                showGuides={showGuides}
+                                onToggleGuides={setShowGuides}
+                            />
+                        </div>
                         {dirty && (
                             <span className="badge-warn">
                                 {missingSeconds > COVERAGE_EPSILON
@@ -1556,6 +1567,8 @@ export default function ClipEditor({ jobId, clipIndex, clipTitle, onClose, onRer
                                 onPlay={onClipPlay}
                                 onPause={stopPlayLoop}
                             />
+                            {/* Platform Safe Zone Collision Mask & Alignment Guides */}
+                            <PlatformSafeZoneOverlay platform={platformSafeZone} showGuides={showGuides} />
                             {/* Persistent Viral Hook Overlay Layer: Full video duration, top safe margin Y: 5%-12% */}
                             {hookOverlayTrack && (
                                 <div

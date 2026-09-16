@@ -222,10 +222,10 @@ def generate_srt(transcript, clip_start, clip_end, output_path, max_chars=20, ma
 
 
 # Vertical margin for burned captions, in PlayResY=288 units (so ~16.7% of the
-# frame height, matching MarginV=320 in 1080x1920). Keeps captions safely in the
-# lower safe zone, strictly below any centered 16:9 main screen window and comfortably
-# above TikTok, Shorts, and Reels bottom chrome UI.
-SAFE_MARGIN_V = 48
+# Platform UI safe zone: bottom metadata buffer occupies Y: 76%-100%.
+# Setting SAFE_MARGIN_V = 68 (~24% of 288p height) enforces caption placement
+# within Y: 65%-75%, strictly avoiding creator handles, sound tracks, and descriptions.
+SAFE_MARGIN_V = 68
 
 
 # The caption look applied automatically to every generated clip. Chosen by
@@ -398,11 +398,10 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     else:
         active_prefix = f"{{\\c{highlight_inline}}}"
 
-    # Safe zone margins: 6% left, 8% right (scaled to PlayResY=288 coordinate space)
-    # PlayResY=288 → implicit PlayResX=512 (16:9). For 9:16 vertical (1080x1920),
-    # the ASS renderer scales proportionally, so we use small pixel values.
+    # Safe zone margins: 6% left, ~15% right (scaled to PlayResY=288 coordinate space)
+    # Right margin of 24 (~15% of 162p width) clears TikTok/Reels/Shorts right action rails (X: 80%-100%)
     safe_margin_l = 10  # ~6% of effective width in 288p space
-    safe_margin_r = 13  # ~8% of effective width in 288p space
+    safe_margin_r = 24  # ~15% of effective width in 288p space
 
     header = (
         "[Script Info]\n"

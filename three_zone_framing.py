@@ -52,6 +52,34 @@ class Zone(IntEnum):
     RIGHT = 2
 
 
+# Target Gaze / Focal Anchor parameters
+FOCAL_TARGET_X = 0.500  # Center vertical axis (48%-52%)
+FOCAL_TARGET_Y = 0.325  # Upper rule-of-thirds line (30%-35%)
+FOCAL_TOLERANCE = 0.025 # Tight ±2.5% canvas displacement tolerance
+
+# Standard Platform UI Obstruction Envelopes (9:16 / 1080x1920)
+PLATFORM_SAFE_ENVELOPES = {
+    "tiktok": {
+        "top_buffer": 0.15,      # Y: 0% - 15% (search bar, LIVE tab)
+        "bottom_buffer": 0.76,   # Y: 76% - 100% (creator metadata, sound track)
+        "right_rail": {"min_x": 0.80, "min_y": 0.42, "max_y": 0.88}, # Like, comment, share
+        "safe_box": {"min_x": 0.10, "max_x": 0.80, "min_y": 0.15, "max_y": 0.75}
+    },
+    "instagram": {
+        "top_buffer": 0.14,      # Y: 0% - 14% (header, back, camera)
+        "bottom_buffer": 0.78,   # Y: 78% - 100% (handle, caption, music)
+        "right_rail": {"min_x": 0.84, "min_y": 0.52, "max_y": 0.88}, # Like, comment, share, disc
+        "safe_box": {"min_x": 0.10, "max_x": 0.82, "min_y": 0.15, "max_y": 0.76}
+    },
+    "youtube": {
+        "top_buffer": 0.14,      # Y: 0% - 14% (header, search, menu)
+        "bottom_buffer": 0.75,   # Y: 75% - 100% (channel pill, title, subscribe)
+        "right_rail": {"min_x": 0.82, "min_y": 0.38, "max_y": 0.88}, # Thumbs up, comment, share, remix
+        "safe_box": {"min_x": 0.10, "max_x": 0.80, "min_y": 0.15, "max_y": 0.74}
+    }
+}
+
+
 @dataclass
 class ThreeZoneConfig:
     """Hyperparameters for 3-Zone Dynamic Framing."""
@@ -406,6 +434,106 @@ class ThreeZoneFramingEngine:
         # Rapid dialogue flag for current scene
         self.rapid_dialogue_active: bool = False
 
+        # Cross-cut eye-trace & gaze consistency tracking
+        self.last_cut_focal_anchor: Optional[Tuple[float, float]] = None # Normalized canvas (x, y) in [0, 1]
+        self.current_focal_anchor: Optional[Tuple[float, float]] = None
+        self.current_scale: float = 1.0
+        self.target_scale: float = 1.0
+
+    def compute_focal_anchor_canvas(self, face_candidate: Dict[str, Any]) -> Tuple[float, float]:
+        """Calculates normalized canvas coordinates [0, 1] of the subject's focal point (eye-line)."""
+        box = face_candidate.get('box', [0, 0, 0, 0])
+        eye_x = face_candidate.get('eye_line', [box[0] + box[2] / 2.0, box[1] + box[3] * 0.35])[0]
+        eye_y = face_candidate.get('eye_line', [box[0] + box[2] / 2.0, box[1] + box[3] * 0.35])[1]
+
+        eff_crop_w = self.crop_w / max(0.1, self.current_scale)
+        eff_crop_h = self.crop_h / max(0.1, self.current_scale)
+
+        crop_x0 = self.current_center_x - eff_crop_w / 2.0
+        crop_y0 = self.current_center_y - eff_crop_h / 2.0
+
+        norm_x = (eye_x - crop_x0) / max(1.0, float(eff_crop_w))
+        norm_y = (eye_y - crop_y0) / max(1.0, float(eff_crop_h))
+        return norm_x, norm_y
+
+    def align_focal_anchor_across_cut(
+        self,
+        face_candidate: Dict[str, Any],
+        target_focal_canvas: Optional[Tuple[float, float]] = None,
+        platform: str = "tiktok"
+    ) -> Tuple[float, float]:
+        """Aligns incoming shot's focal point (eye-line) with target_focal_canvas within ±2.5% tolerance.
+        Defaults target to upper rule-of-thirds (Y: 32.5%, X: 50%).
+        Auto-reframes, scales (punch-in up to 1.25x if needed), and translates the crop.
+        Returns the optimal (target_cx, target_cy) in source pixels.
+        """
+        box = face_candidate.get('box', [0, 0, 0, 0])
+        eye_x = face_candidate.get('eye_line', [box[0] + box[2] / 2.0, box[1] + box[3] * 0.35])[0]
+        eye_y = face_candidate.get('eye_line', [box[0] + box[2] / 2.0, box[1] + box[3] * 0.35])[1]
+
+        target_norm_x = FOCAL_TARGET_X
+        target_norm_y = FOCAL_TARGET_Y
+        if target_focal_canvas is not None:
+            tx, ty = target_focal_canvas
+            # Allow matching target within tight tolerance band while keeping inside visual safe envelope
+            target_norm_x = max(0.44, min(tx, 0.56))
+            target_norm_y = max(0.28, min(ty, 0.40))
+
+        # Dynamic scale calculation: if subject eye-line is low in the frame,
+        # scale gently (up to 1.25x) so the eye-line matches target_norm_y without boundary clamping
+        scale = 1.0
+        if self.crop_h >= self.orig_h * 0.95:
+            ideal_ch = eye_y / max(0.01, target_norm_y)
+            if ideal_ch > self.crop_h:
+                scale = min(1.25, max(1.0, ideal_ch / self.crop_h))
+
+        self.current_scale = scale
+        self.target_scale = scale
+        eff_crop_w = self.crop_w / scale
+        eff_crop_h = self.crop_h / scale
+
+        # Calculate crop center required to position eye at (target_norm_x, target_norm_y)
+        target_cx = eye_x + (0.5 - target_norm_x) * eff_crop_w
+        target_cy = eye_y + (0.5 - target_norm_y) * eff_crop_h
+
+        # Enforce platform UI safe envelope
+        target_cx, target_cy = self.clamp_within_safe_envelope(target_cx, target_cy, eye_x, eye_y, platform)
+
+        return self._clamp_center(target_cx), self._clamp_center_y(target_cy)
+
+    def clamp_within_safe_envelope(
+        self,
+        cx: float,
+        cy: float,
+        subject_x: float,
+        subject_y: float,
+        platform: str = "tiktok"
+    ) -> Tuple[float, float]:
+        """Ensures essential subject focal points do not penetrate platform UI obstruction zones."""
+        env = PLATFORM_SAFE_ENVELOPES.get(platform, PLATFORM_SAFE_ENVELOPES["tiktok"])
+        safe_box = env["safe_box"]
+
+        left = cx - self.crop_w / 2.0
+        top = cy - self.crop_h / 2.0
+        subj_canvas_x = (subject_x - left) / max(1.0, float(self.crop_w))
+        subj_canvas_y = (subject_y - top) / max(1.0, float(self.crop_h))
+
+        if subj_canvas_y < safe_box["min_y"]:
+            overlap_y = (safe_box["min_y"] - subj_canvas_y) * self.crop_h
+            cy -= overlap_y
+        elif subj_canvas_y > safe_box["max_y"]:
+            overlap_y = (subj_canvas_y - safe_box["max_y"]) * self.crop_h
+            cy += overlap_y
+
+        if subj_canvas_x > safe_box["max_x"]:
+            overlap_x = (subj_canvas_x - safe_box["max_x"]) * self.crop_w
+            cx += overlap_x
+        elif subj_canvas_x < safe_box["min_x"]:
+            overlap_x = (safe_box["min_x"] - subj_canvas_x) * self.crop_w
+            cx -= overlap_x
+
+        return cx, cy
+
     def reset(self, new_center: Optional[float] = None, new_center_y: Optional[float] = None):
         """Reset camera state for a new scene cut."""
         center = self.orig_w / 2.0 if new_center is None else new_center
@@ -450,12 +578,14 @@ class ThreeZoneFramingEngine:
 
     def _clamp_center(self, cx: float) -> float:
         """Clamp center x so crop box stays strictly within [0, orig_w]."""
-        half_w = self.crop_w / 2.0
+        eff_cw = self.crop_w / max(0.1, getattr(self, 'current_scale', 1.0))
+        half_w = eff_cw / 2.0
         return max(half_w, min(cx, self.orig_w - half_w))
 
     def _clamp_center_y(self, cy: float) -> float:
         """Clamp center y so crop box stays strictly within [0, orig_h]."""
-        half_h = self.crop_h / 2.0
+        eff_ch = self.crop_h / max(0.1, getattr(self, 'current_scale', 1.0))
+        half_h = eff_ch / 2.0
         return max(half_h, min(cy, self.orig_h - half_h))
 
     def _apply_soft_boundary(self, cx: float, prev_cx: float) -> float:
@@ -518,11 +648,13 @@ class ThreeZoneFramingEngine:
         """Process one frame and return crop box: (x1, y1, crop_w, crop_h)."""
         if force_snap:
             if face_candidates:
-                # Target primary face or center
-                fc = face_candidates[0]['box']
-                target_cx = fc[0] + fc[2] / 2.0
-                target_cy = fc[1] + fc[3] / 2.0
+                # Target primary face with cross-cut gaze / eye-trace consistency
+                target_cx, target_cy = self.align_focal_anchor_across_cut(
+                    face_candidates[0], self.last_cut_focal_anchor
+                )
                 self.snap_to(target_cx, target_cy)
+                self.current_focal_anchor = self.compute_focal_anchor_canvas(face_candidates[0])
+                self.last_cut_focal_anchor = self.current_focal_anchor
             else:
                 self.snap_to(self.orig_w / 2.0, self.orig_h / 2.0)
             self.last_anchor_switch_frame = frame_idx
@@ -764,20 +896,30 @@ class ThreeZoneFramingEngine:
         # Apply soft boundary deceleration for Y
         self.current_center_y = self._apply_soft_boundary_y(self.current_center_y, prev_cy)
 
+        # Update active focal anchor coordinate
+        if face_candidates:
+            self.current_focal_anchor = self.compute_focal_anchor_canvas(face_candidates[0])
+
         return self.get_current_crop_box()
 
     def get_current_crop_box(self) -> Tuple[int, int, int, int]:
         """Return (x1, y1, crop_w, crop_h) with strict canvas bounds clamping."""
+        scale = max(0.1, getattr(self, 'current_scale', 1.0))
+        eff_w = int(round(self.crop_w / scale))
+        eff_h = int(round(self.crop_h / scale))
+        eff_w -= eff_w % 2
+        eff_h -= eff_h % 2
+
         clamped_cx = self._clamp_center(self.current_center_x)
-        x1 = int(round(clamped_cx - self.crop_w / 2.0))
-        x1 = max(0, min(x1, self.max_x))
+        x1 = int(round(clamped_cx - eff_w / 2.0))
+        x1 = max(0, min(x1, self.orig_w - eff_w))
         x1 -= x1 % 2
 
         clamped_cy = self._clamp_center_y(self.current_center_y)
-        y1 = int(round(clamped_cy - self.crop_h / 2.0))
-        y1 = max(0, min(y1, self.orig_h - self.crop_h))
+        y1 = int(round(clamped_cy - eff_h / 2.0))
+        y1 = max(0, min(y1, self.orig_h - eff_h))
         y1 -= y1 % 2
-        return x1, y1, self.crop_w, self.crop_h
+        return x1, y1, eff_w, eff_h
 
 
 class DirectorMultiCameraEngine(ThreeZoneFramingEngine):
