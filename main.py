@@ -39,6 +39,7 @@ from ffmpeg_utils import (video_encode_args, audio_encode_args, QUALITY,
                           cleanup_temp_file, format_ffmpeg_error, escape_filter_value)
 from dotenv import load_dotenv
 import json
+import glob
 
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module='google.protobuf')
@@ -2713,7 +2714,6 @@ if __name__ == '__main__':
 
             # Clean up any leftover temporary clip cut files
             if output_dir and os.path.exists(output_dir):
-                import glob
                 for leftover_temp in glob.glob(os.path.join(output_dir, "temp_*_clip_*.mp4")):
                     cleanup_temp_file(leftover_temp)
 
