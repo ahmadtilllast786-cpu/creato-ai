@@ -431,6 +431,8 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
     the ones the tracker got right. Applied AFTER force_strategy: a per-scene
     hand position always beats the whole-clip choice for the scenes it names.
     """
+    if not input_video or not os.path.exists(input_video) or os.path.getsize(input_video) == 0:
+        raise FileNotFoundError(f"Input video does not exist or is empty: {input_video}")
     ensure_file_unlocked(input_video)
     import main as m
     content_ranges = content_ranges or []

@@ -1290,6 +1290,9 @@ def render_clip(input_video, final_output_video, output_format="auto",
     clip editor's whole-clip framing override. ``crop_overrides`` positions
     individual scenes by hand (the per-scene reframing editor) and wins over
     ``force_strategy`` for the scenes it names."""
+    if not input_video or not os.path.exists(input_video) or os.path.getsize(input_video) == 0:
+        print(f"   ⚠️ Input video {input_video} does not exist or is empty — skipping render.")
+        return False
     if output_format == "horizontal":
         return finalize_clip_passthrough(input_video, final_output_video)
     aspect = 1.0 if output_format == "square" else ASPECT_RATIO
@@ -1400,6 +1403,9 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
     3. FFmpeg Filter Structure:
        [0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[bg];[0:v]scale=1080:-2[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2
     """
+    if not input_video or not os.path.exists(input_video) or os.path.getsize(input_video) == 0:
+        print(f"   ⚠️ Input video {input_video} does not exist or is empty — skipping vertical reframe.")
+        return False
     ensure_file_unlocked(input_video)
 
     reframe_style = os.environ.get("REFRAME_STYLE", "3zone").strip().lower()
@@ -1413,11 +1419,18 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
                                        crop_overrides=crop_overrides)
             print(f"   ⏱️ 3-Zone dynamic reframe total: {time.time() - t0:.1f}s")
             return result
+        except FileNotFoundError as fnf:
+            print(f"   ⚠️ 3-Zone dynamic reframe skipped: {fnf}")
+            return False
         except Exception as e:
             if crop_overrides:
                 raise RuntimeError(
                     f"manual framing needs crop reframe, which failed ({type(e).__name__}: {e})") from e
             print(f"   ⚠️ 3-Zone dynamic reframe failed ({type(e).__name__}: {e}) — falling back to blurred background fill")
+
+    if not input_video or not os.path.exists(input_video) or os.path.getsize(input_video) == 0:
+        print(f"   ⚠️ Input video {input_video} missing or empty — skipping blurred background fallback.")
+        return False
 
     t0 = time.time()
     print(f"🎬 Reframing with Blurred Background Fill (1080x1920): {input_video}")
@@ -1447,8 +1460,9 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
     out_dir = os.path.dirname(os.path.abspath(final_output_video))
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
-    if os.path.isfile(final_output_video):
-        cleanup_temp_file(final_output_video)
+    staging_output = final_output_video + f".staging_{uuid.uuid4().hex[:6]}.mp4"
+    if os.path.isfile(staging_output):
+        cleanup_temp_file(staging_output)
 
     cmd = [
         "ffmpeg", "-y", "-loglevel", "error",
@@ -1459,12 +1473,12 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
         "-c:a", "copy",
         *METADATA_SCRUB,
         "-movflags", "+faststart",
-        final_output_video
+        staging_output
     ]
     try:
         run_ffmpeg_command(cmd, timeout=1800)
     except subprocess.CalledProcessError as copy_err:
-        cleanup_temp_file(final_output_video)
+        cleanup_temp_file(staging_output)
         cmd_reencode = [
             "ffmpeg", "-y", "-loglevel", "error",
             "-i", input_video,
@@ -1474,26 +1488,33 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
             *audio_encode_args(),
             *METADATA_SCRUB,
             "-movflags", "+faststart",
-            final_output_video
+            staging_output
         ]
         try:
             run_ffmpeg_command(cmd_reencode, timeout=1800)
         except subprocess.CalledProcessError as enc_err:
             print(f"   ❌ [Render Error] Failed to render {final_output_video}:")
             print(format_ffmpeg_error(enc_err, max_lines=30))
-            cleanup_temp_file(final_output_video)
+            cleanup_temp_file(staging_output)
             return False
     except Exception as e:
         print(f"   ❌ [Render Error] Unexpected error rendering {final_output_video}: {e}")
-        cleanup_temp_file(final_output_video)
+        cleanup_temp_file(staging_output)
         return False
 
-    ensure_file_unlocked(final_output_video)
+    ensure_file_unlocked(staging_output)
 
     # Verify output file exists and is non-empty
-    if not (os.path.exists(final_output_video) and os.path.getsize(final_output_video) > 0):
-        print(f"   ❌ [Render Error] Output file missing or zero bytes: {final_output_video}")
+    if not (os.path.exists(staging_output) and os.path.getsize(staging_output) > 0):
+        print(f"   ❌ [Render Error] Output file missing or zero bytes: {staging_output}")
+        cleanup_temp_file(staging_output)
         return False
+
+    if not safe_replace(staging_output, final_output_video):
+        # Fallback if safe_replace fails
+        cleanup_temp_file(final_output_video)
+        shutil.move(staging_output, final_output_video)
+    ensure_file_unlocked(final_output_video)
 
     # Record layout range sidecar
     try:
@@ -2383,6 +2404,37 @@ if __name__ == '__main__':
                 os.makedirs(os.path.dirname(os.path.abspath(clip_temp_path)), exist_ok=True)
                 os.makedirs(os.path.dirname(os.path.abspath(clip_final_path)), exist_ok=True)
 
+                # Cache re-use check: if clip already rendered in an earlier session/run, skip re-cut/reframe
+                if not bypass_cache:
+                    existing_pattern = os.path.join(output_dir, f"*{video_title}_clip_{i+1}.mp4")
+                    existing_matches = [
+                        f for f in glob.glob(existing_pattern)
+                        if os.path.isfile(f) and os.path.getsize(f) > 0 and not os.path.basename(f).startswith("temp_")
+                    ]
+                    if existing_matches:
+                        sub_cands = [f for f in existing_matches if os.path.basename(f).startswith("subtitled_")]
+                        hook_cands = [f for f in existing_matches if os.path.basename(f).startswith("hooked_")]
+                        raw_cands = [f for f in existing_matches if os.path.basename(f) == clip_filename]
+                        existing_clip = (
+                            max(sub_cands, key=os.path.getmtime) if sub_cands
+                            else max(hook_cands, key=os.path.getmtime) if hook_cands
+                            else raw_cands[0] if raw_cands else None
+                        )
+                        if existing_clip:
+                            print(f"   ♻️ Clip {i+1} already rendered ({os.path.basename(existing_clip)}) — skipping re-render.")
+                            if not clip.get('is_extracted'):
+                                try:
+                                    import metadata_extractor
+                                    clip['real_metadata'] = metadata_extractor.extract_clip_metadata(
+                                        output_dir, clip_final_path if os.path.exists(clip_final_path) else existing_clip,
+                                        clip_index=i, existing_transcript=transcript, clip_start=start, clip_end=end
+                                    )
+                                    clip['is_extracted'] = True
+                                except Exception as meta_err:
+                                    print(f"   ⚠️ Metadata extraction warning for clip {i+1}: {meta_err}")
+                            print(f"CLIP_READY {i} {os.path.basename(existing_clip)}")
+                            return True
+
                 try:
                     # ffmpeg cut — re-encoding for precision on strict seconds.
                     # Initial cut is serialized across workers to prevent concurrent
@@ -2547,6 +2599,12 @@ if __name__ == '__main__':
             if any('auto_hook' in c or 'hook_grounding' in c for c in shorts):
                 with open(metadata_file, 'w') as f:
                     json.dump(clips_data, f, indent=2)
+
+            # Clean up any leftover temporary clip cut files
+            if output_dir and os.path.exists(output_dir):
+                import glob
+                for leftover_temp in glob.glob(os.path.join(output_dir, "temp_*_clip_*.mp4")):
+                    cleanup_temp_file(leftover_temp)
 
     # Clean up original if requested
     if args.url and not args.keep_original:

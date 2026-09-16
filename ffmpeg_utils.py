@@ -295,6 +295,8 @@ def open_video_capture(path):
     """
     import cv2
     import gc
+    if not path or not os.path.exists(path) or os.path.getsize(path) == 0:
+        raise FileNotFoundError(f"Video file does not exist or is empty: {path}")
     cap = cv2.VideoCapture(path, cv2.CAP_FFMPEG)
     if not cap.isOpened():
         cap = cv2.VideoCapture(path)
