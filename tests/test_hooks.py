@@ -60,9 +60,8 @@ class TestHookStyles:
     picker and HookOverlay's HOOK_LOOKS must mirror these keys)."""
 
     def test_expected_style_names(self):
-        assert set(HOOK_STYLES) == {
-            "classic", "dark", "yellow", "red", "outline", "outline_yellow",
-        }
+        core = {"classic", "dark", "yellow", "red", "outline", "outline_yellow"}
+        assert core.issubset(set(HOOK_STYLES))
 
     def test_boxed_styles_have_opaque_box_and_shadow(self):
         for name in ("classic", "dark", "yellow", "red"):

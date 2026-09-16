@@ -92,7 +92,7 @@ export default function SubtitleModal({ isOpen, onClose, onGenerate, onApplyAll,
     const [isScanning, setIsScanning] = useState(false);
     const [detectionConfidence, setDetectionConfidence] = useState(0);
     const [collisionMode, setCollisionMode] = useState('smart_reposition'); // smart_reposition | occlusion_mask | manual_offset
-    const [manualYOffset, setManualYOffset] = useState(48); // % from top
+    const [manualYOffset, setManualYOffset] = useState(82); // % from top (lower third safe zone)
 
     // Karaoke (server-side ASS burn) state
     const [style, setStyle] = useState('classic'); // classic | karaoke

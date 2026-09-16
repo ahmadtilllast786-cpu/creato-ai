@@ -1395,25 +1395,15 @@ def render_clip(input_video, final_output_video, output_format="auto",
 
 
 # Watermark geometry, as fractions of the clip width/height.
-#
-# Vertical placement is the whole point: the top and bottom strips of a 9:16
-# clip are either black bars or blurred filler (GENERAL layout), so a mark up
-# there is cropped away without touching a single pixel of real footage. At 40%
-# of the height it sits inside the content band — a 16:9 source letterboxed
-# into 9:16 spans roughly 34%-66% — so removing the mark means cutting into the
-# picture. Left-aligned, like OpusClip's.
-WATERMARK_WIDTH_RATIO = 0.30
-WATERMARK_MARGIN_RATIO = 0.05
-WATERMARK_Y_RATIO = 0.40
+WATERMARK_WIDTH_RATIO = 0.18
+WATERMARK_MARGIN_RATIO = 0.04
+WATERMARK_Y_RATIO = 0.90
 WATERMARK_OPACITY = 0.85
 
 
-def apply_watermark(video_path):
-    """Burn the OpenShorts watermark into a finished clip (free plan).
-
-    One re-encode pass on the final file so every output format (TRACK,
-    GENERAL, horizontal passthrough) gets the mark, and later subtitle/hook
-    re-encodes keep it — they re-encode the already-marked pixels.
+def apply_watermark(video_path, position=None):
+    """Burn the OpenShorts watermark into a finished clip.
+    position: 'bottom-left' | 'bottom-right' (defaults to os.environ.get('WATERMARK_POSITION', 'bottom-right'))
     """
     logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              "assets", "watermark.png")
@@ -1421,8 +1411,7 @@ def apply_watermark(video_path):
         print(f"   ⚠️ Watermark asset missing ({logo_path}); clip kept unmarked.")
         return False
 
-    # Scale the lockup from the clip's real width: overlay can't read the other
-    # input's size, and computing it here avoids the deprecated scale2ref.
+    # Scale the lockup from the clip's real width
     try:
         probe = subprocess.check_output(
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -1434,8 +1423,12 @@ def apply_watermark(video_path):
         print(f"   ⚠️ Could not probe clip for watermark ({e}); clip kept unmarked.")
         return False
 
-    wm_w = max(80, int(vw * WATERMARK_WIDTH_RATIO))
-    x = int(vw * WATERMARK_MARGIN_RATIO)
+    wm_w = max(70, int(vw * WATERMARK_WIDTH_RATIO))
+    pos = (position or os.environ.get("WATERMARK_POSITION") or "bottom-right").strip().lower()
+    if pos in ("bottom-left", "left", "bottom_left"):
+        x = int(vw * WATERMARK_MARGIN_RATIO)
+    else:
+        x = int(vw - wm_w - vw * WATERMARK_MARGIN_RATIO)
     y = int(vh * WATERMARK_Y_RATIO)
     ensure_file_unlocked(video_path)
     filt = (
@@ -2479,6 +2472,22 @@ if __name__ == '__main__':
                 json.dump(clips_data, f, indent=2)
             print(f"   Saved metadata to {metadata_file}")
 
+            # Purge lingering dead temp files / uncompleted staging from prior interrupted runs
+            for dead_pattern in ("temp_*.mp4", "*.staging_*.mp4", "*.wm.mp4", "seg_*.mp4"):
+                for dead_f in glob.glob(os.path.join(output_dir, dead_pattern)):
+                    try:
+                        cleanup_temp_file(dead_f)
+                    except Exception:
+                        pass
+
+            if bypass_cache:
+                # Fresh run: purge old clip results so stale previous results are never recycled
+                for old_f in glob.glob(os.path.join(output_dir, f"*{video_title}_clip_*.mp4")):
+                    try:
+                        cleanup_temp_file(old_f)
+                    except Exception:
+                        pass
+
             # 5. Process clips in parallel: each worker cuts + renders one
             # clip. Renders are mostly ffmpeg subprocesses (parallelize well);
             # detector inference is serialized internally via DETECT_LOCK.
@@ -2573,7 +2582,8 @@ if __name__ == '__main__':
 
                     if os.environ.get("WATERMARK") == "1":
                         try:
-                            if apply_watermark(clip_final_path):
+                            wm_pos = os.environ.get("WATERMARK_POSITION", "bottom-right")
+                            if apply_watermark(clip_final_path, position=wm_pos):
                                 ensure_file_unlocked(clip_final_path, timeout=15)
                         except Exception as wm_err:
                             print(f"   ⚠️ Watermark pass warning for clip {i+1}: {wm_err}")
@@ -2639,18 +2649,19 @@ if __name__ == '__main__':
 
                     print(f"   ✅ Clip {i+1} ready: {final_delivery}")
 
-                    # Real Audio, Speech, Silence, and Speaker Metadata Extraction pass
-                    try:
-                        import metadata_extractor
-                        clip_meta = metadata_extractor.extract_clip_metadata(
-                            output_dir, clip_final_path, clip_index=i,
-                            existing_transcript=transcript,
-                            clip_start=start, clip_end=end
-                        )
-                        clip['real_metadata'] = clip_meta
-                        clip['is_extracted'] = True
-                    except Exception as meta_err:
-                        print(f"   ⚠️ Metadata extraction warning for clip {i+1}: {meta_err}")
+                    # Real Audio, Speech, Silence, and Speaker Metadata Extraction pass (strictly once)
+                    if not clip.get('is_extracted'):
+                        try:
+                            import metadata_extractor
+                            clip_meta = metadata_extractor.extract_clip_metadata(
+                                output_dir, clip_final_path, clip_index=i,
+                                existing_transcript=transcript,
+                                clip_start=start, clip_end=end
+                            )
+                            clip['real_metadata'] = clip_meta
+                            clip['is_extracted'] = True
+                        except Exception as meta_err:
+                            print(f"   ⚠️ Metadata extraction warning for clip {i+1}: {meta_err}")
 
                     print(f"CLIP_READY {i} "
                           f"{os.path.basename(captioned or deliver_path)}")

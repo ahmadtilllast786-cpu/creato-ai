@@ -202,32 +202,32 @@ def download_font_if_needed():
 # These 6 styles are a CONTRACT with the frontend (HookModal picker and
 # HookOverlay's HOOK_LOOKS must mirror these keys exactly).
 HOOK_STYLES = {
-    # Black card, white text (Default: sleek high-contrast look).
-    "classic": {"box": (18, 18, 20, 240),     "text": (255, 255, 255), "outline": None, "shadow": True},
+    # Black card, white text with clean subtle border (Default: sleek high-contrast look).
+    "classic": {"box": (18, 18, 20, 240),     "text": (255, 255, 255), "outline": None, "shadow": True, "border": (255, 255, 255, 60)},
     # Dark card, white text.
-    "dark":    {"box": (18, 18, 20, 235),     "text": (255, 255, 255), "outline": None, "shadow": True},
+    "dark":    {"box": (18, 18, 20, 235),     "text": (255, 255, 255), "outline": None, "shadow": True, "border": (255, 255, 255, 45)},
     # High-contrast white card, black text.
-    "white_card": {"box": (255, 255, 255, 245), "text": (0, 0, 0), "outline": None, "shadow": True},
+    "white_card": {"box": (255, 255, 255, 245), "text": (0, 0, 0), "outline": None, "shadow": True, "border": (0, 0, 0, 50)},
     # Bright yellow card, black text (high-contrast TikTok/Reels look).
-    "yellow":  {"box": (255, 214, 0, 245),   "text": (0, 0, 0), "outline": None, "shadow": True},
+    "yellow":  {"box": (255, 214, 0, 245),   "text": (0, 0, 0), "outline": None, "shadow": True, "border": (210, 175, 0, 255)},
     # Red "breaking" card, white text.
-    "red":     {"box": (220, 38, 38, 245),   "text": (255, 255, 255), "outline": None, "shadow": True},
+    "red":     {"box": (220, 38, 38, 245),   "text": (255, 255, 255), "outline": None, "shadow": True, "border": (255, 120, 120, 220)},
     # Cyber neon cyan glow on dark card.
-    "neon":    {"box": (10, 25, 47, 242),     "text": (0, 240, 255), "outline": None, "shadow": True},
+    "neon":    {"box": (10, 25, 47, 242),     "text": (0, 240, 255), "outline": None, "shadow": True, "border": (0, 240, 255, 220)},
     # Growth tech emerald green card.
-    "emerald": {"box": (6, 78, 59, 242),     "text": (52, 211, 153), "outline": None, "shadow": True},
+    "emerald": {"box": (6, 78, 59, 242),     "text": (52, 211, 153), "outline": None, "shadow": True, "border": (52, 211, 153, 220)},
     # Violet / purple card.
-    "purple":  {"box": (99, 102, 241, 242),   "text": (255, 255, 255), "outline": None, "shadow": True},
+    "purple":  {"box": (99, 102, 241, 242),   "text": (255, 255, 255), "outline": None, "shadow": True, "border": (167, 139, 250, 220)},
     # Warm sunset orange card.
-    "orange":  {"box": (234, 88, 12, 242),    "text": (255, 255, 255), "outline": None, "shadow": True},
+    "orange":  {"box": (234, 88, 12, 242),    "text": (255, 255, 255), "outline": None, "shadow": True, "border": (251, 146, 60, 220)},
     # Translucent floating pill card.
-    "pill":    {"box": (15, 23, 42, 210),     "text": (241, 245, 249), "outline": None, "shadow": True},
+    "pill":    {"box": (15, 23, 42, 210),     "text": (241, 245, 249), "outline": None, "shadow": True, "border": (255, 255, 255, 80)},
     # Breaking news banner (dark red with yellow text).
-    "breaking_news": {"box": (185, 28, 28, 250), "text": (254, 240, 138), "outline": None, "shadow": True},
+    "breaking_news": {"box": (185, 28, 28, 250), "text": (254, 240, 138), "outline": None, "shadow": True, "border": (254, 240, 138, 220)},
     # No box: white text with a thick black outline (caption/MrBeast style).
-    "outline": {"box": (0, 0, 0, 0),         "text": (255, 255, 255), "outline": ((0, 0, 0), 8), "shadow": False},
+    "outline": {"box": (0, 0, 0, 0),         "text": (255, 255, 255), "outline": ((0, 0, 0), 8), "shadow": False, "border": None},
     # No box: yellow text with black outline.
-    "outline_yellow": {"box": (0, 0, 0, 0),  "text": (255, 214, 0),   "outline": ((0, 0, 0), 8), "shadow": False},
+    "outline_yellow": {"box": (0, 0, 0, 0),  "text": (255, 214, 0),   "outline": ((0, 0, 0), 8), "shadow": False, "border": None},
 }
 
 
@@ -376,7 +376,14 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
             (shadow_padding, shadow_padding),
             (shadow_padding + box_width, shadow_padding + box_height)
         ]
-        draw_final.rounded_rectangle(main_box, radius=cornerradius, fill=box_fill)
+        border_col = look.get("border")
+        draw_final.rounded_rectangle(
+            main_box,
+            radius=cornerradius,
+            fill=box_fill,
+            outline=border_col,
+            width=2 if border_col else 0
+        )
 
     # 5. Draw Text
     current_y = shadow_padding + padding_y

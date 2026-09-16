@@ -2357,6 +2357,8 @@ async def process_endpoint(
     subtitle_position: Optional[str] = Form(None),
     subtitle_config: Optional[str] = Form(None),
     fresh_clips: Optional[str] = Form(None),
+    watermark: Optional[str] = Form(None),
+    watermark_position: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
     if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
@@ -2400,6 +2402,8 @@ async def process_endpoint(
         subtitle_position = body.get("subtitle_position") or subtitle_position
         subtitle_config = body.get("subtitle_config") or subtitle_config
         fresh_clips = body.get("fresh_clips") or fresh_clips
+        watermark = body.get("watermark") or watermark
+        watermark_position = body.get("watermark_position") or watermark_position
 
     # Normalize output format (auto = keep pipeline default).
     if output_format not in ("vertical", "horizontal", "square"):
@@ -2703,10 +2707,17 @@ async def process_endpoint(
 
     # Meter + reserve minutes for managed users (no-op for BYOK / self-host).
     user_id, priority, reservation_id, user_plan = await reserve_process_minutes(request, url, input_path, job_id)
-    if user_plan == "free":
-        # Free-plan clips carry a burned-in watermark (applied by the main.py
-        # subprocess after each clip renders).
+    if watermark is not None:
+        if str(watermark).lower() in ("1", "true", "yes"):
+            env["WATERMARK"] = "1"
+        else:
+            env.pop("WATERMARK", None)
+    elif user_plan == "free":
+        # Free-plan clips carry a burned-in watermark (applied by main.py)
         env["WATERMARK"] = "1"
+
+    if watermark_position:
+        env["WATERMARK_POSITION"] = str(watermark_position).strip().lower()
 
     # Absolute-URL base for the webhook payload: explicit env wins (the API may
     # sit behind a proxy whose forwarded headers we can't trust), else what the

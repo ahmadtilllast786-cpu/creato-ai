@@ -297,8 +297,15 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [subtitleYOffset, setSubtitleYOffset] = useState(() => {
         try {
             const v = localStorage.getItem('os_subtitle_y_offset');
-            return v != null ? parseFloat(v) : 78;
-        } catch { return 78; }
+            return v != null ? parseFloat(v) : 82;
+        } catch { return 82; }
+    });
+    // Watermark branding toggle & corner positioning
+    const [watermarkEnabled, setWatermarkEnabled] = useState(() => {
+        try { return localStorage.getItem('os_watermark_enabled') === '1'; } catch { return false; }
+    });
+    const [watermarkPosition, setWatermarkPosition] = useState(() => {
+        try { return localStorage.getItem('os_watermark_position') || 'bottom-right'; } catch { return 'bottom-right'; }
     });
     const [subtitleFont, setSubtitleFont] = useState(() => {
         try { return localStorage.getItem('os_subtitle_font') || 'Anton'; } catch { return 'Anton'; }
@@ -385,7 +392,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
         // Magnetic snap points
         if (Math.abs(pct - 15) <= 2.5) pct = 15;
         else if (Math.abs(pct - 50) <= 2.5) pct = 50;
-        else if (Math.abs(pct - 78) <= 2.5) pct = 78;
+        else if (Math.abs(pct - 82) <= 2.5) pct = 82;
         setSubtitleYOffset(pct);
     };
 
@@ -499,6 +506,8 @@ export default function MediaInput({ onProcess, isProcessing }) {
             autoHookStyle,
             autoHookDuration,
             autoHookPosition,
+            watermark: watermarkEnabled ? '1' : '0',
+            watermarkPosition,
             layout,
             subtitleStyle,
             subtitleYOffset,
@@ -509,6 +518,8 @@ export default function MediaInput({ onProcess, isProcessing }) {
             freshClips,
         };
         try {
+            localStorage.setItem('os_watermark_enabled', watermarkEnabled ? '1' : '0');
+            localStorage.setItem('os_watermark_position', watermarkPosition);
             localStorage.setItem('os_auto_hook', autoHook ? '1' : '0');
             localStorage.setItem('os_auto_hook_style', autoHookStyle);
             localStorage.setItem('os_auto_hook_duration', autoHookDuration);
@@ -1169,7 +1180,7 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                     type="button"
                                     onClick={() => {
                                         handleSelectPreset('shorts');
-                                        setSubtitleYOffset(78);
+                                        setSubtitleYOffset(82);
                                         setSubtitleUppercase(true);
                                         setSubtitlesAppliedMsg(false);
                                     }}
@@ -1389,6 +1400,97 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                     </button>
                                 </div>
                             </div>
+                        </div>
+                    )}
+                </div>
+
+                {/* Watermark Branding Option (Adjusted Corner Size, Non-overlapping with Subtitles) */}
+                <div className="mt-5 p-3.5 sm:p-4 rounded-card bg-paper2/50 border border-rule space-y-3">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                        <div
+                            onClick={() => setWatermarkEnabled(!watermarkEnabled)}
+                            className="flex items-center gap-3 cursor-pointer select-none group"
+                        >
+                            <button
+                                type="button"
+                                role="switch"
+                                aria-checked={watermarkEnabled}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setWatermarkEnabled(!watermarkEnabled);
+                                }}
+                                className={`relative inline-flex items-center h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-brass ${
+                                    watermarkEnabled ? 'bg-brass shadow-sm shadow-brass/30' : 'bg-paper3 border border-rule2/60'
+                                }`}
+                            >
+                                <span className="sr-only">Toggle Watermark Branding</span>
+                                <span
+                                    aria-hidden="true"
+                                    className={`pointer-events-none inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                                        watermarkEnabled ? 'translate-x-4.5' : 'translate-x-0.5'
+                                    }`}
+                                />
+                            </button>
+
+                            <div className="flex items-center gap-2 text-xs font-semibold text-ink uppercase tracking-wider group-hover:text-brass transition-colors">
+                                <ShieldCheck size={16} className={watermarkEnabled ? "text-brass" : "text-muted"} />
+                                <span>Burn Watermark Branding</span>
+                            </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                            <span className={`text-[10px] uppercase font-mono px-2 py-0.5 rounded border transition-colors ${
+                                watermarkEnabled 
+                                    ? 'text-brass bg-brass/10 border-brass/25' 
+                                    : 'text-muted bg-paper3 border-rule'
+                            }`}>
+                                {watermarkEnabled ? 'Enabled' : 'Disabled'}
+                            </span>
+                            {watermarkEnabled && (
+                                <span className="text-[10px] text-brass uppercase font-mono px-2 py-0.5 rounded bg-brass/10 border border-brass/25 animate-fade">
+                                    {watermarkPosition === 'bottom-left' ? 'Bottom Left' : 'Bottom Right'}
+                                </span>
+                            )}
+                        </div>
+                    </div>
+
+                    {watermarkEnabled && (
+                        <div className="pt-2 border-t border-rule space-y-2 animate-fade">
+                            <div className="flex items-center justify-between">
+                                <span className="eyebrow">Watermark Corner Position</span>
+                                <span className="text-[10px] font-mono text-emerald-400">Zero Subtitle Overlap</span>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setWatermarkPosition('bottom-right')}
+                                    className={`py-2 px-3 rounded-input border text-xs font-medium transition-all flex items-center justify-between ${
+                                        watermarkPosition === 'bottom-right'
+                                            ? 'border-brass bg-brass/10 text-ink ring-1 ring-brass font-semibold'
+                                            : 'border-rule2 text-muted hover:border-rule hover:text-ink'
+                                    }`}
+                                >
+                                    <span>Bottom Right (Recommended)</span>
+                                    {watermarkPosition === 'bottom-right' && <Check size={13} className="text-brass" />}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setWatermarkPosition('bottom-left')}
+                                    className={`py-2 px-3 rounded-input border text-xs font-medium transition-all flex items-center justify-between ${
+                                        watermarkPosition === 'bottom-left'
+                                            ? 'border-brass bg-brass/10 text-ink ring-1 ring-brass font-semibold'
+                                            : 'border-rule2 text-muted hover:border-rule hover:text-ink'
+                                    }`}
+                                >
+                                    <span>Bottom Left</span>
+                                    {watermarkPosition === 'bottom-left' && <Check size={13} className="text-brass" />}
+                                </button>
+                            </div>
+
+                            <p className="text-[11px] text-muted leading-tight pt-1">
+                                Sized to 18% width and positioned at Y: 90% in the safe corner margin — cleanly separated from lower-third subtitles.
+                            </p>
                         </div>
                     )}
                 </div>

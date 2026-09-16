@@ -882,6 +882,8 @@ function App() {
         auto_hook_style: data.autoHook ? (data.autoHookStyle || 'yellow') : null,
         auto_hook_duration: data.autoHook ? (data.autoHookDuration || 'forever') : null,
         auto_hook_position: data.autoHook ? (data.autoHookPosition || 'top') : null,
+        watermark: data.watermark || null,
+        watermark_position: data.watermarkPosition || null,
         // 'auto' is the server default, so only a deliberate choice travels.
         layouts: data.layout && data.layout !== 'auto' ? data.layout : null,
         subtitle_style: data.subtitleStyle || null,

@@ -18,7 +18,7 @@ interface SubtitlesProps {
 const POSITION_MAP: Record<string, React.CSSProperties> = {
   top: { top: "12%", bottom: "auto", transform: "translate3d(0, 0, 0)" },
   middle: { top: "48%", bottom: "auto", transform: "translate3d(0, -50%, 0)" },
-  bottom: { bottom: "17%", top: "auto", transform: "translate3d(0, 0, 0)" },
+  bottom: { bottom: "13%", top: "auto", transform: "translate3d(0, 0, 0)" },
 };
 
 export const Subtitles: React.FC<SubtitlesProps> = ({ config }) => {
@@ -279,6 +279,7 @@ const WordSpan: React.FC<WordSpanProps> = ({
         fontFamily: fontStack,
         fontSize: Math.round(style.fontSize),
         fontWeight: 700,
+        letterSpacing: "-0.035em",
         color: animation === "karaoke" && isActive ? undefined : color,
         textShadow:
           animation !== "karaoke"

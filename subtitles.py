@@ -221,11 +221,11 @@ def generate_srt(transcript, clip_start, clip_end, output_path, max_chars=20, ma
     return True
 
 
-# Vertical margin for burned captions, in PlayResY=288 units (so ~16.7% of the
-# Platform UI safe zone: bottom metadata buffer occupies Y: 76%-100%.
-# Setting SAFE_MARGIN_V = 68 (~24% of 288p height) enforces caption placement
-# within Y: 65%-75%, strictly avoiding creator handles, sound tracks, and descriptions.
-SAFE_MARGIN_V = 68
+# Vertical margin for burned captions, in PlayResY=288 units.
+# Setting SAFE_MARGIN_V = 38 (~13.2% of 288p height) enforces caption placement
+# within the lower third safe zone (Y: ~83%-87%), leaving the subject's face,
+# torso, and main video content completely clear.
+SAFE_MARGIN_V = 38
 
 
 # The caption look applied automatically to every generated clip. Chosen by
@@ -523,8 +523,8 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     # Dynamic Collision Avoidance & Safe Zones for burned ASS
     if has_burned_in_captions:
         if collision_mode == 'smart_reposition':
-            # Elevate captions above lower-third (Y: 65%-95%) into center safe zone
-            margin_v = 115  # ~40% of PlayResY=288, placing text cleanly above burned-in subtitles
+            # Elevate captions comfortably within lower quadrant (Y: ~78%-80%), never reaching center
+            margin_v = 60  # ~20% of PlayResY=288, keeping text in comfortable lower area
         elif collision_mode == 'occlusion_mask':
             # Activate opaque bounding box in ASS to mask old text
             bg_opacity = 1.0
@@ -568,14 +568,15 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     # halves (exactly mid-frame) is the one place the text covers nobody, so
     # every word event inside such a stretch is anchored there with an inline
     # \an5, per event rather than per style: a clip mixes stacked and single
-    # shots, and the text moves with the cut. ``split_ranges`` is a list of
-    # (start, end) in clip seconds (layout_ranges.split_ranges); the style's
-    # own alignment still rules everywhere else. Only the ASS path can do
-    # this: SRT burns carry one alignment for the whole file.
-    seam_ranges = [(float(a), float(b)) for a, b in (split_ranges or [])]
-
+    # scenes, and rebuilding the style per scene would mean splitting the ASS
+    # file. Returns the prefix for the given time.
     def seam_prefix(t):
-        return "{\\an5}" if any(a <= t < b for a, b in seam_ranges) else ""
+        if not split_ranges:
+            return ""
+        for s, e in split_ranges:
+            if s <= t < e:
+                return "{\\an5\\pos(81,144)}"
+        return ""
 
     safe_font = _sanitize_font_name(font_name)
     base_opacity = _clamp_number(base_opacity, 0.05, 1.0, 1.0)
@@ -594,7 +595,7 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
         outline_colour = hex_to_ass_color(border_color, 1.0, fallback="000000")
         outline_width = max(1, int(border_width))
 
-    back_colour = hex_to_ass_color("#000000", 0.0)
+    back_colour = hex_to_ass_color("#000000", 0.45)
     highlight_inline = _hex_to_ass_inline_color(highlight_color, fallback="FFD700")
 
     # Inline override tags for the active word; {\r} after it resets to the
@@ -602,18 +603,17 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     if effect == "glow":
         glow_bord = max(3, int(outline_width) + 2)
         active_prefix = (f"{{\\c&HFFFFFF&\\3c{highlight_inline}"
-                         f"\\bord{glow_bord}\\blur4}}")
+                         f"\\bord{glow_bord}\\blur4\\fsp-0.8}}")
     elif effect == "box":
         box_bord = max(4, int(outline_width) + 3)
         active_prefix = (f"{{\\c&HFFFFFF&\\3c{highlight_inline}"
-                         f"\\bord{box_bord}\\blur0}}")
+                         f"\\bord{box_bord}\\blur0\\fsp-0.8}}")
     elif effect == "pop":
-        # Gentle pop. The old 75->112 range started the word so small that any
-        # frame caught mid-animation read as a sizing bug rather than a beat.
+        # Gentle pop with tight letter spacing
         active_prefix = (f"{{\\c{highlight_inline}"
-                         f"\\fscx90\\fscy90\\t(0,110,\\fscx108\\fscy108)}}")
+                         f"\\fsp-0.8\\fscx90\\fscy90\\t(0,110,\\fscx108\\fscy108)}}")
     else:
-        active_prefix = f"{{\\c{highlight_inline}}}"
+        active_prefix = f"{{\\c{highlight_inline}\\fsp-0.8}}"
 
     # Safe zone margins: 6% left, ~15% right (scaled to PlayResY=288 coordinate space)
     # Right margin of 24 (~15% of 162p width) clears TikTok/Reels/Shorts right action rails (X: 80%-100%)
@@ -633,8 +633,8 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
         f"Style: Default,{safe_font},{final_fontsize},{primary_colour},{primary_colour},"
-        f"{outline_colour},{back_colour},1,0,0,0,100,100,0,0,{border_style},"
-        f"{outline_width},0,{ass_alignment},{safe_margin_l},{safe_margin_r},{int(_clamp_number(margin_v, 0, 275, SAFE_MARGIN_V))},1\n"
+        f"{outline_colour},{back_colour},1,0,0,0,100,100,-0.8,0,{border_style},"
+        f"{outline_width},1,{ass_alignment},{safe_margin_l},{safe_margin_r},{int(_clamp_number(margin_v, 0, 275, SAFE_MARGIN_V))},1\n"
         "\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
