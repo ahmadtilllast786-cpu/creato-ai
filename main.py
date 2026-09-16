@@ -1245,10 +1245,10 @@ def auto_hook_clip(clip_path, clip):
     Returns (hooked_path, hook_config), or None when skipped or failed — a
     hook problem must never cost the user the clip itself (same fail-open
     contract as auto_caption_clip)."""
-    text = (clip.get('viral_hook_text') or '').strip()
+    text = (clip.get('viral_hook_text') or clip.get('video_title_for_youtube_short') or clip.get('hook') or clip.get('title') or '').strip()
     if not text:
         return None
-    style = os.environ.get("AUTO_HOOK_STYLE", "classic")
+    style = os.environ.get("AUTO_HOOK_STYLE", "yellow")
     # User request: hook should remain over video till video end by default!
     # If AUTO_HOOK_SECONDS is "0", "forever", "full", "whole", or empty, duration is None (until video ends)
     raw_seconds = os.environ.get("AUTO_HOOK_SECONDS", "0").strip().lower()

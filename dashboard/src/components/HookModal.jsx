@@ -32,7 +32,7 @@ const HOOK_STYLES = [
 ];
 
 const POSITION_OPTIONS = [
-    { value: 'top', label: 'top (above video)' },
+    { value: 'top', label: 'top (header safe zone)' },
     { value: 'center', label: 'center' },
     { value: 'bottom', label: 'bottom' },
 ];
@@ -69,7 +69,15 @@ const DURATION_MODE_OPTIONS = [
 
 // Last-used hook settings, restored on the next open
 function loadHookPrefs() {
-    try { return JSON.parse(localStorage.getItem('os_hook_prefs')) || {}; } catch { return {}; }
+    try {
+        const p = JSON.parse(localStorage.getItem('os_hook_prefs')) || {};
+        if (!p.durationMode || (p.durationMode === 'custom' && !p.displayDuration)) {
+            p.durationMode = 'forever';
+        }
+        return p;
+    } catch {
+        return { durationMode: 'forever', position: 'top' };
+    }
 }
 
 export default function HookModal({
@@ -88,7 +96,7 @@ export default function HookModal({
 }) {
     const prefs = loadHookPrefs();
     const [text, setText] = useState(initialText || 'POV: You are using the viral hook feature');
-    const [position, setPosition] = useState(prefs.position || 'top'); // default top above video
+    const [position, setPosition] = useState(prefs.position || 'top'); // default top header safe zone
     const [platformSafeZone, setPlatformSafeZone] = useState('off');
     const [showGuides, setShowGuides] = useState(false);
     const [size, setSize] = useState(prefs.size || 'M');
@@ -188,7 +196,7 @@ export default function HookModal({
         switch (position) {
             case 'center': return 'items-center justify-center';
             case 'bottom': return 'items-center justify-end pb-[20%]';
-            case 'top': default: return 'items-center justify-start pt-[3%]';
+            case 'top': default: return 'items-center justify-start pt-[4.5%]';
         }
     };
 

@@ -446,11 +446,11 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
         overlay_x = (video_width - box_w) // 2
         
         # Permanent Viral Hook Positioning: Anchor the initial hook headline permanently
-        # in the dedicated safe margin strictly above the subject (Y: 2.5%–4%), so it never overlays
-        # speaker faces, hair, or lower subtitles.
+        # in the Top Header Safe Zone (Y: 0%–12%, centered at Y: 4.5%), strictly above the subject,
+        # so it never overlays speaker faces, hair, or lower subtitles.
         POSITION_MAP = {
-            "top": max(16, int(video_height * 0.025)),
-            "safe_top": max(32, int(video_height * 0.05)),
+            "top": max(36, int(video_height * 0.045)),
+            "safe_top": max(36, int(video_height * 0.045)),
             "center": (video_height - box_h) // 2,
             "bottom": int(video_height * 0.78),
         }
@@ -480,11 +480,12 @@ def add_hook_to_video(video_path, text, output_path, position="top", font_scale=
 
         print(f"🎬 Overlaying hook: '{text}' at {overlay_x},{overlay_y} ({'forever (until end)' if is_forever else f'{dur_float:.1f}s'})")
         
+        # eof_action=repeat guarantees the hook overlay stays displayed across all frames till EOF
         ffmpeg_cmd = [
             'ffmpeg', '-y',
             '-i', video_path,
             '-i', img_path,
-            '-filter_complex', f"[0:v][1:v]overlay={overlay_x}:{overlay_y}{enable_filter}",
+            '-filter_complex', f"[0:v][1:v]overlay={overlay_x}:{overlay_y}:eof_action=repeat{enable_filter}",
             '-c:a', 'copy',
             *video_encode_args(QUALITY),
             *METADATA_SCRUB,

@@ -217,19 +217,19 @@ const EFFECT_OPTIONS = [
 ];
 
 const HOOK_STYLE_OPTIONS = [
-    { value: 'yellow', label: 'Viral Yellow (TikTok / Reels Punchy Box)' },
-    { value: 'classic', label: 'Black & White Card (Sleek Classic)' },
-    { value: 'neon', label: 'Cyber Neon (Cyan Glow on Dark)' },
-    { value: 'emerald', label: 'Tech Emerald (Deep Green & Mint)' },
-    { value: 'red', label: 'Breaking Red (Urgent News Box)' },
-    { value: 'purple', label: 'Violet Glow (Royal Purple Box)' },
-    { value: 'orange', label: 'Sunset Orange (Warm Sunset Card)' },
-    { value: 'white_card', label: 'White Card (Black on White)' },
-    { value: 'pill', label: 'Minimal Pill (Translucent Slate Pill)' },
-    { value: 'breaking_news', label: 'News Banner (Crimson & Yellow)' },
-    { value: 'outline', label: 'White Outline (No Box, MrBeast Style)' },
-    { value: 'outline_yellow', label: 'Yellow Outline (No Box, Bold Yellow)' },
-    { value: 'dark', label: 'Dark Sleek (Subtle Dark Card)' },
+    { value: 'yellow', label: 'Viral Yellow', desc: 'TikTok punchy bright yellow box with bold black text', bg: '#FFD600', text: '#000000', border: '#E6C200' },
+    { value: 'classic', label: 'Black & White', desc: 'Sleek classic dark card with white text', bg: '#121214', text: '#FFFFFF', border: '#27272A' },
+    { value: 'neon', label: 'Cyber Neon', desc: 'Electric cyan glow on deep navy box', bg: '#0A192F', text: '#00F0FF', border: '#00F0FF55' },
+    { value: 'emerald', label: 'Tech Emerald', desc: 'Deep green card with vivid mint text', bg: '#064E3B', text: '#34D399', border: '#34D39955' },
+    { value: 'red', label: 'Breaking Red', desc: 'Urgent breaking news red box with white text', bg: '#DC2626', text: '#FFFFFF', border: '#EF4444' },
+    { value: 'purple', label: 'Violet Glow', desc: 'Royal violet card with bright white text', bg: '#6366F1', text: '#FFFFFF', border: '#818CF8' },
+    { value: 'orange', label: 'Sunset Orange', desc: 'Warm sunset orange card with bold white text', bg: '#EA580C', text: '#FFFFFF', border: '#F97316' },
+    { value: 'white_card', label: 'White Card', desc: 'High-contrast clean white card with black text', bg: '#FFFFFF', text: '#000000', border: '#E4E4E7' },
+    { value: 'pill', label: 'Minimal Pill', desc: 'Translucent floating slate pill card', bg: '#1E293B', text: '#F1F5F9', border: '#334155' },
+    { value: 'breaking_news', label: 'News Banner', desc: 'Crimson banner with yellow highlight headline', bg: '#B91C1C', text: '#FEF08A', border: '#DC2626' },
+    { value: 'outline', label: 'White Outline', desc: 'No box, bold white text with black stroke (MrBeast)', bg: 'transparent', text: '#FFFFFF', border: '#52525B', outline: true },
+    { value: 'outline_yellow', label: 'Yellow Outline', desc: 'No box, bold yellow text with black stroke', bg: 'transparent', text: '#FFD600', border: '#52525B', outline: true },
+    { value: 'dark', label: 'Dark Sleek', desc: 'Subtle dark card with soft white text', bg: '#18181B', text: '#F4F4F5', border: '#3F3F46' },
 ];
 
 const HOOK_DURATION_OPTIONS = [
@@ -240,8 +240,8 @@ const HOOK_DURATION_OPTIONS = [
 ];
 
 const HOOK_POSITION_OPTIONS = [
-    { value: 'top', label: 'Top (Above Video - No Overlap)' },
-    { value: 'safe_top', label: 'Top Safe Zone (Slight Margin)' },
+    { value: 'top', label: 'Top Header Safe Zone (Recommended)' },
+    { value: 'safe_top', label: 'Top Header Safe Zone (Slight Margin)' },
     { value: 'center', label: 'Center' },
     { value: 'bottom', label: 'Bottom' },
 ];
@@ -273,11 +273,17 @@ export default function MediaInput({ onProcess, isProcessing }) {
         try { return localStorage.getItem('os_auto_hook_style') || 'yellow'; } catch { return 'yellow'; }
     });
     const [autoHookDuration, setAutoHookDuration] = useState(() => {
-        try { return localStorage.getItem('os_auto_hook_duration') || 'forever'; } catch { return 'forever'; }
+        try {
+            const saved = localStorage.getItem('os_auto_hook_duration');
+            if (!saved || saved === '5' || saved === '0') return 'forever';
+            return saved;
+        } catch { return 'forever'; }
     });
     const [autoHookPosition, setAutoHookPosition] = useState(() => {
         try { return localStorage.getItem('os_auto_hook_position') || 'top'; } catch { return 'top'; }
     });
+    const [subtitlesAppliedMsg, setSubtitlesAppliedMsg] = useState(false);
+    const [hookAppliedMsg, setHookAppliedMsg] = useState(false);
     // Layout: 'auto' lets the AI pick per video (server default); the others
     // force one on so a podcast host who knows what they uploaded doesn't
     // depend on the detector, and 'none' keeps the plain single crop.
@@ -819,6 +825,46 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                             </div>
                                         )}
 
+                                        {/* Viral Hook Headline Live Preview (Anchored in Top Header Safe Zone) */}
+                                        {autoHook && (() => {
+                                            const selectedHook = HOOK_STYLE_OPTIONS.find((h) => h.value === autoHookStyle) || HOOK_STYLE_OPTIONS[0];
+                                            const hookTop = autoHookPosition === 'center' ? '50%' : autoHookPosition === 'bottom' ? '78%' : '4.5%';
+                                            return (
+                                                <div
+                                                    style={{
+                                                        top: hookTop,
+                                                        left: '50%',
+                                                        transform: autoHookPosition === 'center' ? 'translate(-50%, -50%)' : 'translateX(-50%)',
+                                                        maxWidth: '92%',
+                                                        width: 'max-content',
+                                                    }}
+                                                    className="absolute z-20 flex flex-col items-center pointer-events-none select-none transition-all duration-150"
+                                                >
+                                                    <div
+                                                        style={{
+                                                            backgroundColor: selectedHook.bg || '#FFD600',
+                                                            color: selectedHook.text || '#000000',
+                                                            borderRadius: '7px',
+                                                            padding: selectedHook.bg === 'transparent' ? '2px 6px' : '4px 10px',
+                                                            border: selectedHook.border ? `1px solid ${selectedHook.border}` : 'none',
+                                                            boxShadow: selectedHook.bg !== 'transparent' ? '0 4px 12px rgba(0,0,0,0.5)' : 'none',
+                                                            textShadow: selectedHook.outline ? '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000' : 'none',
+                                                            fontFamily: 'Noto Serif, Georgia, serif',
+                                                        }}
+                                                        className="text-center font-bold text-[10.5px] leading-tight shadow"
+                                                    >
+                                                        VIRAL HOOK HEADLINE 🎯
+                                                    </div>
+                                                    <div className="flex items-center gap-1 mt-0.5 px-1.5 py-0.5 rounded-full bg-black/85 border border-emerald-500/30 shadow">
+                                                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                                        <span className="text-[7.5px] font-mono text-emerald-300">
+                                                            Top Safe Zone • Whole Video
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })()}
+
                                         {/* Interactive Draggable Caption Box */}
                                         {subtitleStyle !== 'none' && (
                                             <div
@@ -1116,78 +1162,204 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                     )}
                                 </div>
                             </div>
+
+                            {/* Subtitles Apply & Reset Action Bar */}
+                            <div className="pt-3 border-t border-rule flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        handleSelectPreset('shorts');
+                                        setSubtitleYOffset(78);
+                                        setSubtitleUppercase(true);
+                                        setSubtitlesAppliedMsg(false);
+                                    }}
+                                    className="px-3 py-1.5 rounded text-xs text-muted hover:text-ink border border-rule hover:border-rule2 transition-colors flex items-center justify-center gap-1.5"
+                                >
+                                    <RotateCcw size={12} />
+                                    <span>Cancel / Reset Subtitles</span>
+                                </button>
+                                <div className="flex items-center justify-end gap-2">
+                                    {subtitlesAppliedMsg && (
+                                        <span className="text-[11px] font-mono text-emerald-400 flex items-center gap-1 animate-fade">
+                                            <Check size={13} /> Subtitle Settings Applied
+                                        </span>
+                                    )}
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            try {
+                                                localStorage.setItem('os_subtitle_style', subtitleStyle);
+                                                localStorage.setItem('os_subtitle_y_offset', String(subtitleYOffset));
+                                            } catch { /* ignore */ }
+                                            setSubtitlesAppliedMsg(true);
+                                            setTimeout(() => setSubtitlesAppliedMsg(false), 3000);
+                                        }}
+                                        className="px-4 py-1.5 rounded bg-brass text-black font-semibold text-xs hover:bg-brass/90 transition-colors flex items-center justify-center gap-1.5 shadow-sm"
+                                    >
+                                        <Check size={13} />
+                                        <span>Apply Subtitle Settings</span>
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     )}
                 </div>
 
                 {/* Viral Hook Headline & Visual Style Options */}
-                <div className="mt-5 p-3.5 rounded-input bg-paper2/40 border border-rule2">
-                    <div className="flex items-center justify-between mb-2.5">
-                        <label className="flex items-center gap-2 text-xs font-medium text-ink cursor-pointer select-none">
+                <div className="mt-5 p-3.5 sm:p-4 rounded-card bg-paper2/50 border border-rule space-y-4">
+                    <div className="flex items-center justify-between">
+                        <label className="flex items-center gap-2 text-xs font-semibold text-ink uppercase tracking-wider cursor-pointer select-none">
                             <input
                                 type="checkbox"
                                 checked={autoHook}
                                 onChange={(e) => setAutoHook(e.target.checked)}
                                 className="w-4 h-4 shrink-0 accent-[var(--color-accent)] cursor-pointer"
                             />
-                            <Wand2 size={14} className="text-brass" />
-                            <span>Burn Viral Hook Headline on Clips</span>
+                            <Wand2 size={16} className="text-brass" />
+                            <span>Burn Hook Headlines on Clip</span>
                         </label>
-                        {autoHook && (
-                            <span className="text-[10px] text-brass uppercase font-mono px-1.5 py-0.5 rounded bg-brass/10 border border-brass/20">Active</span>
-                        )}
+                        <div className="flex items-center gap-2">
+                            {autoHook && (
+                                <span className="text-[10px] text-brass uppercase font-mono px-2 py-0.5 rounded bg-brass/10 border border-brass/25">
+                                    {HOOK_STYLE_OPTIONS.find((h) => h.value === autoHookStyle)?.label || 'Viral Yellow'} • {autoHookDuration === 'forever' ? 'Whole Video' : `${autoHookDuration}s`}
+                                </span>
+                            )}
+                        </div>
                     </div>
 
                     {autoHook && (
-                        <div className="space-y-3 pt-2.5 border-t border-rule animate-fade">
+                        <div className="space-y-4 pt-1 animate-fade">
                             <div>
-                                <div className="flex items-center justify-between mb-1.5">
-                                    <p className="eyebrow">Hook Visual Style</p>
-                                    <span className="text-[11px] text-muted">13 viral styles</span>
+                                <div className="flex items-center justify-between mb-2">
+                                    <span className="eyebrow">Select Hook Visual Style</span>
+                                    <span className="text-[11px] font-mono text-muted">13 Styles (Like Subtitles)</span>
                                 </div>
-                                <select
-                                    value={autoHookStyle}
-                                    onChange={(e) => setAutoHookStyle(e.target.value)}
-                                    className="input-field w-full text-xs sm:text-sm py-2"
-                                    aria-label="Hook Visual Style"
-                                >
-                                    {HOOK_STYLE_OPTIONS.map((opt) => (
-                                        <option key={opt.value} value={opt.value}>{opt.label}</option>
-                                    ))}
-                                </select>
+
+                                {/* Hook Visual Styles Grid (13 Selectable Cards) */}
+                                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+                                    {HOOK_STYLE_OPTIONS.map((opt) => {
+                                        const active = autoHookStyle === opt.value;
+                                        return (
+                                            <button
+                                                key={opt.value}
+                                                type="button"
+                                                onClick={() => setAutoHookStyle(opt.value)}
+                                                className={`p-2.5 rounded-input border text-left transition-all relative overflow-hidden flex flex-col justify-between min-h-[82px] ${
+                                                    active
+                                                        ? 'border-brass bg-brass/10 ring-1 ring-brass text-ink shadow-sm'
+                                                        : 'border-rule2 bg-paper hover:border-rule hover:bg-paper2/50 text-muted'
+                                                }`}
+                                            >
+                                                {/* Visual Badge Preview */}
+                                                <div
+                                                    style={{
+                                                        backgroundColor: opt.bg,
+                                                        color: opt.text,
+                                                        border: opt.border ? `1px solid ${opt.border}` : 'none',
+                                                        textShadow: opt.outline ? '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000' : 'none',
+                                                    }}
+                                                    className="w-full py-1 px-1.5 rounded text-center text-[10px] font-bold tracking-tight mb-1.5 shadow-sm truncate"
+                                                >
+                                                    HOOK PREVIEW
+                                                </div>
+
+                                                <div className="flex items-center justify-between w-full mb-0.5">
+                                                    <span className={`text-xs font-semibold truncate ${active ? 'text-brass' : 'text-ink'}`}>
+                                                        {opt.label}
+                                                    </span>
+                                                    {active && <Check size={12} className="text-brass shrink-0" />}
+                                                </div>
+                                                <span className="text-[10px] text-muted leading-tight line-clamp-2">
+                                                    {opt.desc}
+                                                </span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
                             </div>
 
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                            {/* Duration & Position Controls */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-rule">
                                 <div>
-                                    <p className="eyebrow mb-1.5">Hook Duration</p>
+                                    <div className="flex items-center justify-between mb-1.5">
+                                        <p className="eyebrow">Hook Duration</p>
+                                        <span className="text-[10px] font-mono text-emerald-400">Whole Video Default</span>
+                                    </div>
                                     <select
                                         value={autoHookDuration}
                                         onChange={(e) => setAutoHookDuration(e.target.value)}
-                                        className="input-field w-full text-xs py-1.5"
+                                        className="input-field w-full text-xs py-2"
                                         aria-label="Hook Duration"
                                     >
                                         {HOOK_DURATION_OPTIONS.map((opt) => (
                                             <option key={opt.value} value={opt.value}>{opt.label}</option>
                                         ))}
                                     </select>
+                                    <p className="text-[10px] text-muted mt-1">
+                                        Permanently visible until the video ends to maximize short-form hook retention.
+                                    </p>
                                 </div>
+
                                 <div>
-                                    <p className="eyebrow mb-1.5">Hook Position</p>
+                                    <div className="flex items-center justify-between mb-1.5">
+                                        <p className="eyebrow">Hook Position</p>
+                                        <span className="text-[10px] font-mono text-brass">Top Safe Zone</span>
+                                    </div>
                                     <select
                                         value={autoHookPosition}
                                         onChange={(e) => setAutoHookPosition(e.target.value)}
-                                        className="input-field w-full text-xs py-1.5"
+                                        className="input-field w-full text-xs py-2"
                                         aria-label="Hook Position"
                                     >
                                         {HOOK_POSITION_OPTIONS.map((opt) => (
                                             <option key={opt.value} value={opt.value}>{opt.label}</option>
                                         ))}
                                     </select>
+                                    <p className="text-[10px] text-muted mt-1">
+                                        Anchored inside the Top Header Safe Zone so it never overlaps speaker faces or captions.
+                                    </p>
                                 </div>
                             </div>
-                            <p className="text-[11px] text-muted leading-tight">
-                                Placed safely above the video subject so it stays until video end without covering faces or eyes.
-                            </p>
+
+                            {/* Hook Apply & Reset Action Bar */}
+                            <div className="pt-3 border-t border-rule flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setAutoHookStyle('yellow');
+                                        setAutoHookDuration('forever');
+                                        setAutoHookPosition('top');
+                                        setHookAppliedMsg(false);
+                                    }}
+                                    className="px-3 py-1.5 rounded text-xs text-muted hover:text-ink border border-rule hover:border-rule2 transition-colors flex items-center justify-center gap-1.5"
+                                >
+                                    <RotateCcw size={12} />
+                                    <span>Cancel / Reset Hook</span>
+                                </button>
+                                <div className="flex items-center justify-end gap-2">
+                                    {hookAppliedMsg && (
+                                        <span className="text-[11px] font-mono text-emerald-400 flex items-center gap-1 animate-fade">
+                                            <Check size={13} /> Hook Settings Applied
+                                        </span>
+                                    )}
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            try {
+                                                localStorage.setItem('os_auto_hook_style', autoHookStyle);
+                                                localStorage.setItem('os_auto_hook_duration', autoHookDuration);
+                                                localStorage.setItem('os_auto_hook_position', autoHookPosition);
+                                            } catch { /* ignore */ }
+                                            setHookAppliedMsg(true);
+                                            setTimeout(() => setHookAppliedMsg(false), 3000);
+                                        }}
+                                        className="px-4 py-1.5 rounded bg-brass text-black font-semibold text-xs hover:bg-brass/90 transition-colors flex items-center justify-center gap-1.5 shadow-sm"
+                                    >
+                                        <Check size={13} />
+                                        <span>Apply Hook Settings</span>
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     )}
                 </div>

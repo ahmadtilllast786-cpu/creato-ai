@@ -21,11 +21,11 @@ const SIZE_SCALE: Record<string, number> = {
 };
 
 // Permanent Viral Hook Positioning: Anchor the initial hook headline permanently
-// in the dedicated safe margin strictly above the subject (Y: 2.5%–4%), so it never overlays
-// speaker faces, eyes, or lower subtitles.
+// in the Top Header Safe Zone (Y: 0%–12%, centered at Y: 4.5%), strictly above the subject,
+// so it never overlays speaker faces, eyes, or lower subtitles.
 const POSITION_STYLE: Record<string, React.CSSProperties> = {
-  top: { top: "2.5%", bottom: "auto" },
-  safe_top: { top: "5%", bottom: "auto" },
+  top: { top: "4.5%", bottom: "auto" },
+  safe_top: { top: "4.5%", bottom: "auto" },
   center: { top: "50%", bottom: "auto", transform: "translateY(-50%)" },
   bottom: { top: "78%", bottom: "auto" },
 };
@@ -58,10 +58,12 @@ const HOOK_LOOKS: Record<string, HookLook> = {
 export const HookOverlay: React.FC<HookOverlayProps> = ({ config }) => {
   const { fps, durationInFrames: totalVideoFrames } = useVideoConfig();
   const isForever = Boolean(
-    config.displayForever !== false ||
-    !config.displayDurationSec ||
-    config.displayDurationSec <= 0 ||
-    (config.displayDurationSec * fps >= totalVideoFrames)
+    config.displayForever === true ||
+    config.durationMode === "forever" ||
+    (config.displayForever !== false &&
+      (!config.displayDurationSec ||
+        config.displayDurationSec <= 0 ||
+        config.displayDurationSec * fps >= totalVideoFrames))
   );
   const displayFrames = isForever
     ? totalVideoFrames
