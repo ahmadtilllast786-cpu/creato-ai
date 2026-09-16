@@ -82,7 +82,7 @@ OUTPUT — RETURN ONLY VALID JSON (no markdown, no comments). Order clips by pre
       "video_description_for_tiktok": "<description for TikTok oriented to get views>",
       "video_description_for_instagram": "<description for Instagram oriented to get views>",
       "video_title_for_youtube_short": "<title for YouTube Short oriented to get views 100 chars max>",
-      "viral_hook_text": "<SHORT punchy text overlay (max 10 words) with 1-2 fitting emojis. MUST BE IN THE SAME LANGUAGE AS THE VIDEO TRANSCRIPT. Examples: 'POV: You realized... 😳', 'Did you know? 🤯', 'Stop doing this! 🚫'>"
+      "viral_hook_text": "<Full complete sentence hook headline (one complete, grammatically sound sentence with 1-2 fitting emojis, 6 to 14 words). MUST BE A 100% COMPLETE THOUGHT/STATEMENT IN THE SAME LANGUAGE AS THE VIDEO TRANSCRIPT. DO NOT CUT OFF, DO NOT USE TRAILING ELLIPSIS OR '...'. Examples: 'He tried the world's most dangerous diet 🤯', 'This single mistake cost him everything 😱', 'Nobody expected what happened next 🔥'>"
     }}
   ]
 }}
@@ -1339,6 +1339,8 @@ def auto_hook_clip(clip_path, clip):
     hook problem must never cost the user the clip itself (same fail-open
     contract as auto_caption_clip)."""
     text = (clip.get('viral_hook_text') or clip.get('video_title_for_youtube_short') or clip.get('hook') or clip.get('title') or '').strip()
+    # Strip any dangling ellipsis or trailing dots/dashes to ensure clean, finished sentence
+    text = re.sub(r'[\s\.\-_…]+$', '', text).strip()
     if not text:
         return None
     style = os.environ.get("AUTO_HOOK_STYLE", "yellow")
@@ -1402,11 +1404,15 @@ WATERMARK_OPACITY = 0.85
 
 
 def apply_watermark(video_path, position=None):
-    """Burn the OpenShorts watermark into a finished clip.
+    """Burn watermark (custom uploaded from device or default OpenShorts logo) into a finished clip.
     position: 'bottom-left' | 'bottom-right' (defaults to os.environ.get('WATERMARK_POSITION', 'bottom-right'))
     """
-    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             "assets", "watermark.png")
+    custom_logo = os.environ.get("WATERMARK_PATH")
+    if custom_logo and os.path.exists(custom_logo) and os.path.getsize(custom_logo) > 0:
+        logo_path = custom_logo
+    else:
+        logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 "assets", "watermark.png")
     if not os.path.exists(logo_path):
         print(f"   ⚠️ Watermark asset missing ({logo_path}); clip kept unmarked.")
         return False

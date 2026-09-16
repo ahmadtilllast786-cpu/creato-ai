@@ -307,6 +307,21 @@ export default function MediaInput({ onProcess, isProcessing }) {
     const [watermarkPosition, setWatermarkPosition] = useState(() => {
         try { return localStorage.getItem('os_watermark_position') || 'bottom-right'; } catch { return 'bottom-right'; }
     });
+    const [watermarkFile, setWatermarkFile] = useState(null);
+    const [watermarkPreview, setWatermarkPreview] = useState(null);
+
+    const handleWatermarkFileChange = (e) => {
+        const selected = e.target.files?.[0];
+        if (selected) {
+            setWatermarkFile(selected);
+            setWatermarkEnabled(true);
+            try {
+                const reader = new FileReader();
+                reader.onload = (ev) => setWatermarkPreview(ev.target?.result);
+                reader.readAsDataURL(selected);
+            } catch { /* ignore */ }
+        }
+    };
     const [subtitleFont, setSubtitleFont] = useState(() => {
         try { return localStorage.getItem('os_subtitle_font') || 'Anton'; } catch { return 'Anton'; }
     });
@@ -506,8 +521,9 @@ export default function MediaInput({ onProcess, isProcessing }) {
             autoHookStyle,
             autoHookDuration,
             autoHookPosition,
-            watermark: watermarkEnabled ? '1' : '0',
+            watermark: (watermarkEnabled || !!watermarkFile) ? '1' : '0',
             watermarkPosition,
+            watermarkFile: watermarkFile || null,
             layout,
             subtitleStyle,
             subtitleYOffset,
@@ -855,16 +871,16 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                                         style={{
                                                             backgroundColor: selectedHook.bg || '#FFD600',
                                                             color: selectedHook.text || '#000000',
-                                                            borderRadius: '7px',
-                                                            padding: selectedHook.bg === 'transparent' ? '2px 6px' : '4px 10px',
+                                                            borderRadius: '8px',
+                                                            padding: selectedHook.bg === 'transparent' ? '3px 8px' : '5px 12px',
                                                             border: selectedHook.border ? `1px solid ${selectedHook.border}` : 'none',
-                                                            boxShadow: selectedHook.bg !== 'transparent' ? '0 4px 12px rgba(0,0,0,0.5)' : 'none',
+                                                            boxShadow: selectedHook.bg !== 'transparent' ? '0 4px 14px rgba(0,0,0,0.5)' : 'none',
                                                             textShadow: selectedHook.outline ? '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000' : 'none',
                                                             fontFamily: 'Noto Serif, Georgia, serif',
                                                         }}
-                                                        className="text-center font-bold text-[10.5px] leading-tight shadow"
+                                                        className="text-center font-bold text-[11.5px] leading-tight shadow"
                                                     >
-                                                        VIRAL HOOK HEADLINE 🎯
+                                                        HE TRIED THE DANGEROUS DIET 🤯
                                                     </div>
                                                     <div className="flex items-center gap-1 mt-0.5 px-1.5 py-0.5 rounded-full bg-black/85 border border-emerald-500/30 shadow">
                                                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
@@ -875,6 +891,33 @@ export default function MediaInput({ onProcess, isProcessing }) {
                                                 </div>
                                             );
                                         })()}
+
+                                        {/* Live Corner Watermark Branding Preview */}
+                                        {(watermarkEnabled || watermarkFile) && (
+                                            <div
+                                                style={{
+                                                    position: 'absolute',
+                                                    bottom: '8%',
+                                                    left: watermarkPosition === 'bottom-left' ? '6%' : 'auto',
+                                                    right: watermarkPosition === 'bottom-right' ? '6%' : 'auto',
+                                                    maxWidth: '24%',
+                                                    pointerEvents: 'none',
+                                                }}
+                                                className="z-20 flex flex-col items-center animate-fade select-none"
+                                            >
+                                                {watermarkPreview ? (
+                                                    <img
+                                                        src={watermarkPreview}
+                                                        alt="Watermark"
+                                                        className="w-full h-auto max-h-6 object-contain opacity-90 drop-shadow"
+                                                    />
+                                                ) : (
+                                                    <div className="px-1.5 py-0.5 rounded bg-black/70 border border-white/25 text-[7px] font-mono text-white/90 uppercase tracking-tighter shadow-sm">
+                                                        WATERMARK
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
 
                                         {/* Interactive Draggable Caption Box */}
                                         {subtitleStyle !== 'none' && (
@@ -1455,42 +1498,98 @@ export default function MediaInput({ onProcess, isProcessing }) {
                     </div>
 
                     {watermarkEnabled && (
-                        <div className="pt-2 border-t border-rule space-y-2 animate-fade">
-                            <div className="flex items-center justify-between">
-                                <span className="eyebrow">Watermark Corner Position</span>
-                                <span className="text-[10px] font-mono text-emerald-400">Zero Subtitle Overlap</span>
+                        <div className="pt-2 border-t border-rule space-y-3 animate-fade">
+                            {/* Upload custom watermark from device */}
+                            <div>
+                                <div className="flex items-center justify-between mb-1.5">
+                                    <span className="eyebrow">Watermark Image Source</span>
+                                    {watermarkFile ? (
+                                        <span className="text-[10px] font-mono text-emerald-400">Custom Image Active</span>
+                                    ) : (
+                                        <span className="text-[10px] font-mono text-muted">Default Logo</span>
+                                    )}
+                                </div>
+
+                                {watermarkFile ? (
+                                    <div className="flex items-center gap-3 p-2.5 rounded-input bg-paper3 border border-rule">
+                                        {watermarkPreview ? (
+                                            <img
+                                                src={watermarkPreview}
+                                                alt="Watermark Preview"
+                                                className="w-8 h-8 rounded object-contain bg-black/20 border border-rule2 shrink-0 p-0.5"
+                                            />
+                                        ) : (
+                                            <ShieldCheck size={18} className="text-brass shrink-0" />
+                                        )}
+                                        <div className="min-w-0 flex-1">
+                                            <p className="text-xs font-medium text-ink truncate">{watermarkFile.name}</p>
+                                            <p className="text-[10px] text-muted font-mono">
+                                                {(watermarkFile.size / 1024).toFixed(1)} KB • Applied across all generated clips
+                                            </p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setWatermarkFile(null);
+                                                setWatermarkPreview(null);
+                                            }}
+                                            className="p-1 text-muted hover:text-ink hover:bg-paper2 rounded-full transition-colors shrink-0"
+                                            title="Remove custom watermark"
+                                        >
+                                            <X size={15} />
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <label className="flex items-center justify-center gap-2 py-2.5 px-3 border border-dashed border-rule2 hover:border-brass rounded cursor-pointer transition-colors text-xs text-muted hover:text-ink2 bg-paper/40">
+                                        <input
+                                            type="file"
+                                            accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                                            onChange={handleWatermarkFileChange}
+                                            className="hidden"
+                                        />
+                                        <Upload size={13} className="text-brass shrink-0" />
+                                        <span>Upload custom watermark from device (PNG, JPG, WebP)</span>
+                                    </label>
+                                )}
                             </div>
 
-                            <div className="grid grid-cols-2 gap-2">
-                                <button
-                                    type="button"
-                                    onClick={() => setWatermarkPosition('bottom-right')}
-                                    className={`py-2 px-3 rounded-input border text-xs font-medium transition-all flex items-center justify-between ${
-                                        watermarkPosition === 'bottom-right'
-                                            ? 'border-brass bg-brass/10 text-ink ring-1 ring-brass font-semibold'
-                                            : 'border-rule2 text-muted hover:border-rule hover:text-ink'
-                                    }`}
-                                >
-                                    <span>Bottom Right (Recommended)</span>
-                                    {watermarkPosition === 'bottom-right' && <Check size={13} className="text-brass" />}
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => setWatermarkPosition('bottom-left')}
-                                    className={`py-2 px-3 rounded-input border text-xs font-medium transition-all flex items-center justify-between ${
-                                        watermarkPosition === 'bottom-left'
-                                            ? 'border-brass bg-brass/10 text-ink ring-1 ring-brass font-semibold'
-                                            : 'border-rule2 text-muted hover:border-rule hover:text-ink'
-                                    }`}
-                                >
-                                    <span>Bottom Left</span>
-                                    {watermarkPosition === 'bottom-left' && <Check size={13} className="text-brass" />}
-                                </button>
-                            </div>
+                            <div>
+                                <div className="flex items-center justify-between mb-1.5">
+                                    <span className="eyebrow">Watermark Corner Position</span>
+                                    <span className="text-[10px] font-mono text-emerald-400">Zero Subtitle Overlap</span>
+                                </div>
 
-                            <p className="text-[11px] text-muted leading-tight pt-1">
-                                Sized to 18% width and positioned at Y: 90% in the safe corner margin — cleanly separated from lower-third subtitles.
-                            </p>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => setWatermarkPosition('bottom-right')}
+                                        className={`py-2 px-3 rounded-input border text-xs font-medium transition-all flex items-center justify-between ${
+                                            watermarkPosition === 'bottom-right'
+                                                ? 'border-brass bg-brass/10 text-ink ring-1 ring-brass font-semibold'
+                                                : 'border-rule2 text-muted hover:border-rule hover:text-ink'
+                                        }`}
+                                    >
+                                        <span>Bottom Right (Recommended)</span>
+                                        {watermarkPosition === 'bottom-right' && <Check size={13} className="text-brass" />}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setWatermarkPosition('bottom-left')}
+                                        className={`py-2 px-3 rounded-input border text-xs font-medium transition-all flex items-center justify-between ${
+                                            watermarkPosition === 'bottom-left'
+                                                ? 'border-brass bg-brass/10 text-ink ring-1 ring-brass font-semibold'
+                                                : 'border-rule2 text-muted hover:border-rule hover:text-ink'
+                                        }`}
+                                    >
+                                        <span>Bottom Left</span>
+                                        {watermarkPosition === 'bottom-left' && <Check size={13} className="text-brass" />}
+                                    </button>
+                                </div>
+
+                                <p className="text-[11px] text-muted leading-tight pt-1">
+                                    Sized to 18% width and positioned at Y: 90% in the safe corner margin — cleanly separated from lower-third subtitles.
+                                </p>
+                            </div>
                         </div>
                     )}
                 </div>

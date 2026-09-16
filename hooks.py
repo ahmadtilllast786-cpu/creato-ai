@@ -250,17 +250,17 @@ def create_hook_image(text, target_width, output_image_path="hook_overlay.png", 
     has_box = box_fill[3] > 0
     draw_shadow = look["shadow"]
     
-    # Configuration - sleek and compact so it sits cleanly above video without excess padding
-    padding_x = 24
-    padding_y = 16
-    line_spacing = 12
-    cornerradius = 16
+    # Configuration - sleek and prominent so it sits cleanly in the top safe zone without excess padding
+    padding_x = 28
+    padding_y = 18
+    line_spacing = 14
+    cornerradius = 18
     shadow_offset = (3, 3) 
     shadow_blur = 8
     shadow_padding = 10  # Consistent padding for shadow/box boundaries
     
-    # Font Size Calculation (approx 4.6% of width for clean headline proportionality)
-    base_font_size = int(target_width * 0.046)
+    # Font Size Calculation (approx 5.4% of width for clean headline proportionality)
+    base_font_size = int(target_width * 0.054)
     font_size = int(base_font_size * font_scale)
     
     try:

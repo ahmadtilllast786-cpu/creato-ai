@@ -894,7 +894,7 @@ function App() {
         fresh_clips: data.freshClips ? '1' : '0',
       };
 
-      if (data.bgAudio || data.type === 'file') {
+      if (data.bgAudio || data.watermarkFile || data.type === 'file') {
         const formData = new FormData();
         if (data.type === 'file' && data.payload) {
           formData.append('file', data.payload);
@@ -903,6 +903,9 @@ function App() {
         }
         if (data.bgAudio) {
           formData.append('bg_audio', data.bgAudio);
+        }
+        if (data.watermarkFile) {
+          formData.append('watermark_file', data.watermarkFile);
         }
         formData.append('acknowledged', data.acknowledged ? 'true' : 'false');
         formData.append('output_format', data.outputFormat || 'auto');

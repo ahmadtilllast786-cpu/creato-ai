@@ -143,8 +143,8 @@ const HookBox: React.FC<HookBoxProps> = ({ config, displayFrames, isForever }) =
   const positionStyle = POSITION_STYLE[config.position] ?? POSITION_STYLE.top;
   const look = HOOK_LOOKS[config.style ?? "classic"] ?? HOOK_LOOKS.classic;
 
-  // Base font size: 5% of 1080 width (matches hooks.py logic)
-  const baseFontSize = 1080 * 0.05;
+  // Base font size: 5.4% of 1080 width (matches hooks.py logic for bigger, punchier headline)
+  const baseFontSize = 1080 * 0.054;
   const fontSize = Math.round(baseFontSize * scale);
   const outlinePx = Math.round(look.outlinePx * scale);
 
@@ -167,11 +167,11 @@ const HookBox: React.FC<HookBoxProps> = ({ config, displayFrames, isForever }) =
         style={{
           opacity: animOpacity,
           transform: `scale(${animScale}) translateY(${animTranslateY}px)`,
-          maxWidth: "90%",
+          maxWidth: "92%",
           backgroundColor: customBgBox,
           border: customBgBox !== "transparent" ? (look.border ?? "1.5px solid rgba(255, 255, 255, 0.25)") : "none",
-          borderRadius: 20,
-          padding: customBgBox !== "transparent" ? `${22 * scale}px ${28 * scale}px` : 0,
+          borderRadius: 22,
+          padding: customBgBox !== "transparent" ? `${24 * scale}px ${30 * scale}px` : 0,
           boxShadow: look.shadow && customBgBox !== "transparent" ? "0 10px 30px rgba(0, 0, 0, 0.45), 0 0 1px rgba(255, 255, 255, 0.2)" : "none",
           backdropFilter: customBgBox !== "transparent" ? "blur(16px)" : "none",
           WebkitBackdropFilter: customBgBox !== "transparent" ? "blur(16px)" : "none",

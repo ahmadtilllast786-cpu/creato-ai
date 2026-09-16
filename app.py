@@ -2359,6 +2359,7 @@ async def process_endpoint(
     fresh_clips: Optional[str] = Form(None),
     watermark: Optional[str] = Form(None),
     watermark_position: Optional[str] = Form(None),
+    watermark_file: Optional[UploadFile] = File(None),
 ):
     api_key = await resolve_gemini(request)
     if not api_key and not (llm_backend.active() and not BILLING_ENABLED):
@@ -2680,6 +2681,17 @@ async def process_endpoint(
                 pass
         print(f"[bg-audio] job={job_id} file={safe_bg} vol={bg_audio_volume or 0.18}")
 
+    # Optional Custom Watermark Image from Device
+    if watermark_file and getattr(watermark_file, "filename", None):
+        safe_wm = os.path.basename(watermark_file.filename or "watermark.png")
+        custom_wm_path = os.path.join(UPLOAD_DIR, f"{job_id}_wm_{safe_wm}")
+        with open(custom_wm_path, "wb") as buffer:
+            while chunk := await watermark_file.read(1024 * 1024):
+                buffer.write(chunk)
+        env["WATERMARK"] = "1"
+        env["WATERMARK_PATH"] = custom_wm_path
+        print(f"[watermark] job={job_id} custom_file={safe_wm} path={custom_wm_path}")
+
     # Subtitle Style and Custom Draggable Coordinates Configuration
     if subtitle_style:
         sub_preset = str(subtitle_style).strip().lower()
@@ -2710,7 +2722,7 @@ async def process_endpoint(
     if watermark is not None:
         if str(watermark).lower() in ("1", "true", "yes"):
             env["WATERMARK"] = "1"
-        else:
+        elif not env.get("WATERMARK_PATH"):
             env.pop("WATERMARK", None)
     elif user_plan == "free":
         # Free-plan clips carry a burned-in watermark (applied by main.py)
