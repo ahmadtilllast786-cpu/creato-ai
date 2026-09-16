@@ -352,20 +352,30 @@ safe_remove = cleanup_temp_file
 
 def safe_replace(src: str, dst: str, retries: int = 5, delay: float = 0.5) -> bool:
     """Safely replace dst with src on Windows, handling locks and retries."""
+    import shutil
     if not os.path.exists(src):
         return False
     for attempt in range(retries):
         try:
             gc.collect()
-            if os.path.exists(dst):
-                cleanup_temp_file(dst, retries=2, delay=0.2)
-            os.replace(src, dst)
-            return True
+            try:
+                os.replace(src, dst)
+                return True
+            except PermissionError:
+                if os.path.exists(dst):
+                    cleanup_temp_file(dst, retries=2, delay=0.2)
+                os.replace(src, dst)
+                return True
         except PermissionError as e:
             if attempt < retries - 1:
                 time.sleep(delay)
             else:
-                print(f"⚠️ [SafeReplace] PermissionError replacing {src} -> {dst} after {retries} retries: {e}")
+                try:
+                    shutil.copy2(src, dst)
+                    cleanup_temp_file(src, retries=2, delay=0.2)
+                    return True
+                except Exception:
+                    print(f"⚠️ [SafeReplace] PermissionError replacing {src} -> {dst} after {retries} retries: {e}")
         except Exception as e:
             print(f"⚠️ [SafeReplace] Error replacing {src} -> {dst}: {e}")
             return False

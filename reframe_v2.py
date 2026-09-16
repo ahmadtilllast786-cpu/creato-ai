@@ -286,18 +286,12 @@ def apply_crop_overrides(xs, strategies, scene_boundaries, overrides,
 
 
 def _analyze_trajectory(input_video, scenes_boundaries, scene_strategies,
-                        fps, orig_w, orig_h, cameraman, tracker,
-                        three_zone_engine=None):
-    """Analyzes the downscaled video stream and produces the camera trajectory.
-    Uses Rule of Thirds / 3-Zone Dynamic Framing Engine by default.
+                        fps, orig_w, orig_h, cameraman, tracker):
+    """Replays the per-frame decision loop on a downscaled ffmpeg-decoded stream.
+    Uses MediaPipe face detection with YOLO fallback and SmoothedCameraman.
     Returns xs: crop x per frame (None on GENERAL frames)."""
     import numpy as np
     import main as m
-    import three_zone_framing as tzf
-
-    use_three_zone = os.environ.get("THREE_ZONE_FRAMING", "1") != "0"
-    if use_three_zone and three_zone_engine is None:
-        three_zone_engine = tzf.DirectorMultiCameraEngine(orig_w, orig_h, fps=fps)
 
     small_w = min(ANALYSIS_MAX_WIDTH, orig_w)
     if small_w % 2:
@@ -317,8 +311,6 @@ def _analyze_trajectory(input_video, scenes_boundaries, scene_strategies,
     xs = []
     frame_number = 0
     current_scene_index = 0
-    candidates = []
-    active_idx = None
     try:
         while True:
             buf = proc.stdout.read(frame_bytes)
@@ -352,67 +344,19 @@ def _analyze_trajectory(input_video, scenes_boundaries, scene_strategies,
                     # (see SmoothedCameraman.begin_scene).
                     tracker.reset()
                     cameraman.begin_scene()
-                    active_idx = None
-                    if three_zone_engine:
-                        three_zone_engine.reset()
 
                 if frame_number % m.DETECT_STRIDE == 0 or cut:
                     candidates = m.detect_face_candidates(frame)
-                    for cand in candidates:
-                        cand['box'] = [int(v * scale) for v in cand['box']]
-                        cand['score'] = cand['box'][2] * cand['box'][3]
-                        if 'eye_line' in cand:
-                            cand['eye_line'] = [v * scale for v in cand['eye_line']]
-                        if 'focal_anchor' in cand:
-                            cand['focal_anchor'] = [v * scale for v in cand['focal_anchor']]
-
-                    # Fuse YOLO multi-person detections so turned heads, profile faces,
-                    # and side characters are never dropped
-                    yolo_people = m.detect_people_yolo(frame, conf_threshold=0.25)
-                    for p in yolo_people:
-                        p_head = [int(v * scale) for v in p['head_box']]
-                        # Check overlap with existing candidates
-                        overlap = False
-                        for c in candidates:
-                            cb = c['box']
-                            # Simple bounding box overlap check
-                            x_overlap = max(0, min(p_head[0] + p_head[2], cb[0] + cb[2]) - max(p_head[0], cb[0]))
-                            y_overlap = max(0, min(p_head[1] + p_head[3], cb[1] + cb[3]) - max(p_head[1], cb[1]))
-                            if x_overlap * y_overlap > 0.25 * (p_head[2] * p_head[3]):
-                                overlap = True
-                                break
-                        if not overlap:
-                            candidates.append({
-                                'box': p_head,
-                                'score': p_head[2] * p_head[3] * p.get('conf', 0.8),
-                                'person_box': [int(v * scale) for v in p['box']]
-                            })
-
                     target_box = tracker.get_target(candidates, frame_number, orig_w, orig_h)
-                    active_idx = None
                     if target_box:
-                        cameraman.update_target(target_box)
-                        if candidates:
-                            for c_i, c in enumerate(candidates):
-                                if c.get('box') == target_box:
-                                    active_idx = c_i
-                                    break
-                            if active_idx is None:
-                                candidates.insert(0, {'box': target_box, 'score': 100000})
-                                active_idx = 0
+                        scaled_target = [int(v * scale) for v in target_box]
+                        cameraman.update_target(scaled_target)
+                    elif frame_number % m.YOLO_FALLBACK_STRIDE == 0 or cut:
+                        person_box = m.detect_person_yolo(frame)
+                        if person_box:
+                            cameraman.update_target([int(v * scale) for v in person_box])
 
-                if use_three_zone and three_zone_engine:
-                    x1, _y1, _cw, _ch = three_zone_engine.update_frame(
-                        frame_idx=frame_number,
-                        face_candidates=candidates if candidates else None,
-                        active_speaker_idx=active_idx,
-                        frame_image=frame,
-                        force_snap=is_scene_start
-                    )
-                    cameraman.current_center_x = x1 + cameraman.crop_width / 2.0
-                    cameraman.target_center_x = cameraman.current_center_x
-                else:
-                    x1, _y1, _x2, _y2 = cameraman.get_crop_box(force_snap=is_scene_start)
+                x1, _y1, _x2, _y2 = cameraman.get_crop_box(force_snap=is_scene_start)
                 xs.append(x1)
 
             frame_number += 1

@@ -17,6 +17,7 @@ from scenedetect.detectors import ContentDetector
 from ultralytics import YOLO
 import torch
 import os
+import shutil
 import numpy as np
 from tqdm import tqdm
 import yt_dlp
@@ -1551,8 +1552,8 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
         return False
     ensure_file_unlocked(input_video)
 
-    reframe_style = os.environ.get("REFRAME_STYLE", "3zone").strip().lower()
-    # Intelligent 3-Zone Dynamic Framing engine (or manual scene crop overrides from editor UI)
+    reframe_style = os.environ.get("REFRAME_STYLE", "auto").strip().lower()
+    # Dynamic Face Tracking Vertical Reframe (or manual scene crop overrides from editor UI)
     if crop_overrides or reframe_style not in ("blur_bg", "blurred", "blur"):
         try:
             import reframe_v2
@@ -1560,16 +1561,16 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
             result = reframe_v2.render(input_video, final_output_video, aspect_ratio,
                                        force_strategy=force_strategy,
                                        crop_overrides=crop_overrides)
-            print(f"   ⏱️ 3-Zone dynamic reframe total: {time.time() - t0:.1f}s")
+            print(f"   ⏱️ Dynamic face tracking reframe total: {time.time() - t0:.1f}s")
             return result
         except FileNotFoundError as fnf:
-            print(f"   ⚠️ 3-Zone dynamic reframe skipped: {fnf}")
+            print(f"   ⚠️ Face tracking reframe skipped: {fnf}")
             return False
         except Exception as e:
             if crop_overrides:
                 raise RuntimeError(
                     f"manual framing needs crop reframe, which failed ({type(e).__name__}: {e})") from e
-            print(f"   ⚠️ 3-Zone dynamic reframe failed ({type(e).__name__}: {e}) — falling back to blurred background fill")
+            print(f"   ⚠️ Face tracking reframe failed ({type(e).__name__}: {e}) — falling back to blurred background fill")
 
     if not input_video or not os.path.exists(input_video) or os.path.getsize(input_video) == 0:
         print(f"   ⚠️ Input video {input_video} missing or empty — skipping blurred background fallback.")
