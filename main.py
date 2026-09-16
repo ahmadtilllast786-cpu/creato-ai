@@ -2599,11 +2599,13 @@ if __name__ == '__main__':
                     # ffmpeg cut — re-encoding for precision on strict seconds.
                     # Initial cut is serialized across workers to prevent concurrent
                     # read conflicts on input_video on Windows.
+                    dur = max(0.1, float(end) - float(start))
                     cut_command = [
                         'ffmpeg', '-y',
-                        '-ss', str(start),
-                        '-to', str(end),
+                        '-ss', f"{float(start):.3f}",
                         '-i', input_video,
+                        '-t', f"{dur:.3f}",
+                        '-avoid_negative_ts', 'make_zero',
                         *video_encode_args(QUALITY_FAST),
                         *audio_encode_args(),
                         clip_temp_path

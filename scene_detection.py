@@ -99,29 +99,57 @@ def _get_tn2_model():
 
 
 def _extract_frames_small(video_path):
-    """Decode the whole clip as 48x27 RGB frames via ffmpeg (~4KB/frame)."""
+    """Decode the whole clip as 48x27 RGB frames via ffmpeg (~4KB/frame) with OpenCV fallback."""
+    ensure_file_unlocked(video_path)
     cmd = [
-        "ffmpeg", "-nostdin", "-i", video_path,
+        "ffmpeg", "-nostdin",
+        "-err_detect", "ignore_err",
+        "-max_error_rate", "1.0",
+        "-i", video_path,
         "-vf", f"scale={_TN2_W}:{_TN2_H}",
         "-pix_fmt", "rgb24", "-f", "rawvideo", "-",
     ]
-    stdout = run_ffmpeg_command(cmd, timeout=900)
-    frame_bytes = _TN2_H * _TN2_W * 3
-    n = len(stdout) // frame_bytes
-    if n == 0:
-        raise RuntimeError("ffmpeg produced no frames")
-    return np.frombuffer(stdout[:n * frame_bytes],
-                         dtype=np.uint8).reshape(n, _TN2_H, _TN2_W, 3)
+    try:
+        stdout = run_ffmpeg_command(cmd, timeout=900)
+        frame_bytes = _TN2_H * _TN2_W * 3
+        n = len(stdout) // frame_bytes
+        if n > 0:
+            return np.frombuffer(stdout[:n * frame_bytes],
+                                 dtype=np.uint8).reshape(n, _TN2_H, _TN2_W, 3)
+    except Exception:
+        pass
+
+    # OpenCV fallback: completely immune to FFmpeg exit code 69 / demuxer errors
+    with open_video_capture(video_path) as cap:
+        frames = []
+        while True:
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                break
+            small = cv2.resize(frame, (_TN2_W, _TN2_H), interpolation=cv2.INTER_AREA)
+            small_rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+            frames.append(small_rgb)
+        if not frames:
+            raise RuntimeError("Could not decode any frames from video")
+        return np.array(frames, dtype=np.uint8)
 
 
 def _detect_transnetv2(video_path):
     import torch
 
-    with open_video_capture(video_path) as cap:
-        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
+    ensure_file_unlocked(video_path)
     frames = _extract_frames_small(video_path)
+    total_frames = len(frames)
+    fps = 30.0
+    try:
+        with open_video_capture(video_path) as cap:
+            fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+            cap_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            if cap_frames > total_frames:
+                total_frames = cap_frames
+    except Exception:
+        pass
+
     model = _get_tn2_model()
     threshold = float(os.environ.get("TRANSNETV2_THRESHOLD", "0.5"))
 
