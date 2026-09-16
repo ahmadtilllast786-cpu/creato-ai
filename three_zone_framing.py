@@ -440,12 +440,6 @@ class ThreeZoneFramingEngine:
         self.current_scale: float = 1.0
         self.target_scale: float = 1.0
 
-        # Subject persistence / memory (holds camera anchor when detections flicker or subject turns)
-        self.subject_memory_frames: int = 0
-        self.max_subject_memory: int = int(round(1.5 * self.fps))
-        self.last_known_subject_cx: Optional[float] = None
-        self.last_known_subject_cy: Optional[float] = None
-
     def compute_focal_anchor_canvas(self, face_candidate: Dict[str, Any]) -> Tuple[float, float]:
         """Calculates normalized canvas coordinates [0, 1] of the subject's focal point (eye-line)."""
         box = face_candidate.get('box', [0, 0, 0, 0])
@@ -564,9 +558,6 @@ class ThreeZoneFramingEngine:
         self.action_detector.reset()
         self.turn_monitor.reset()
         self.rapid_dialogue_active = False
-        self.subject_memory_frames = 0
-        self.last_known_subject_cx = None
-        self.last_known_subject_cy = None
 
     def snap_to(self, center_x: float, center_y: Optional[float] = None):
         """Instant cut/snap to target center without panning."""
@@ -653,8 +644,7 @@ class ThreeZoneFramingEngine:
                      active_speaker_idx: Optional[int] = None,
                      frame_image: Optional[np.ndarray] = None,
                      force_snap: bool = False,
-                     speech_durations: Optional[Dict[Zone, float]] = None,
-                     text_regions: Optional[List[Dict[str, Any]]] = None) -> Tuple[int, int, int, int]:
+                     speech_durations: Optional[Dict[Zone, float]] = None) -> Tuple[int, int, int, int]:
         """Process one frame and return crop box: (x1, y1, crop_w, crop_h)."""
         if force_snap:
             if face_candidates:
@@ -667,8 +657,7 @@ class ThreeZoneFramingEngine:
                 self.last_cut_focal_anchor = self.current_focal_anchor
             else:
                 self.snap_to(self.orig_w / 2.0, self.orig_h / 2.0)
-            # Reset dwell timer so smooth dynamic tracking resumes immediately on subsequent frames
-            self.last_anchor_switch_frame = -10000
+            self.last_anchor_switch_frame = frame_idx
             self.last_zone_switch_frame = frame_idx
             self.pending_anchor_x = None
             self.pending_anchor_count = 0
@@ -743,116 +732,147 @@ class ThreeZoneFramingEngine:
             ideal_center_y = top_face_y + self.crop_h * (0.5 - target_headroom)
             self.target_center_y = self._clamp_center_y(ideal_center_y)
 
-            # Multi-person group & side character framing:
-            # When multiple characters are present, check their bounding span.
-            # If characters fit within the 9:16 crop window (span <= 90% of crop_w),
-            # smoothly center on their midpoint so neither character is cut off or lost.
+            # Multi-person group hysteresis:
+            # Require multi-person balance to persist across consecutive frames before shifting
+            # to group midpoint, preventing oscillation when a second face flickers.
+            is_balanced_group = False
             if len(face_candidates) > 1 and active_speaker_idx is None:
+                sorted_cands = sorted(
+                    face_candidates,
+                    key=lambda c: c.get('score', c['box'][2] * c['box'][3]),
+                    reverse=True
+                )
+                s0 = sorted_cands[0].get('score', sorted_cands[0]['box'][2] * sorted_cands[0]['box'][3])
+                s1 = sorted_cands[1].get('score', sorted_cands[1]['box'][2] * sorted_cands[1]['box'][3])
+                if s1 > self.config.group_balance_ratio * s0:
+                    is_balanced_group = True
+
+            if is_balanced_group:
+                self.group_active_frames += 1
+            else:
+                self.group_active_frames = max(0, self.group_active_frames - 1)
+
+            if self.group_active_frames >= 4:
                 all_min_x = min(c['box'][0] for c in face_candidates)
                 all_max_x = max(c['box'][0] + c['box'][2] for c in face_candidates)
                 group_span = all_max_x - all_min_x
-                if group_span <= self.crop_w * 0.90:
-                    face_cx = (all_min_x + all_max_x) / 2.0
-                else:
+                group_mid = (all_min_x + all_max_x) / 2.0
+                if group_span > self.crop_w * 0.90:
                     self.rapid_dialogue_active = True
-
-            # Contextual text tracking: preserve on-screen titles / graphics / captions
-            if text_regions:
-                for txt in text_regions:
-                    t_box = txt.get('box', (0, 0, 0, 0))
-                    t_w = t_box[2]
-                    # Only consider meaningful text regions (>= 10% of frame width)
-                    if t_w >= self.orig_w * 0.10:
-                        comb_min_x = min(face_cx - box[2] / 2.0, t_box[0])
-                        comb_max_x = max(face_cx + box[2] / 2.0, t_box[0] + t_w)
-                        if (comb_max_x - comb_min_x) <= self.crop_w * 0.92:
-                            # Both character and contextual text fit comfortably in frame:
-                            face_cx = (comb_min_x + comb_max_x) / 2.0
-                            break
+                face_cx = group_mid
 
             desired_center = face_cx
             desired_zone = get_zone_for_x(face_cx, self.orig_w, self.config)
-
-            # Update subject persistence memory so camera holds anchor if subject temporarily turns or flickers
-            self.last_known_subject_cx = desired_center
-            self.last_known_subject_cy = self.target_center_y
-            self.subject_memory_frames = 0
         else:
-            # No face detected and no active action:
-            # Use subject persistence memory (up to 1.5s / 45 frames) to hold camera anchor
-            if self.subject_memory_frames < self.max_subject_memory and self.last_known_subject_cx is not None:
-                self.subject_memory_frames += 1
-                desired_center = self.last_known_subject_cx
-                desired_zone = self.committed_zone
-                if self.last_known_subject_cy is not None:
-                    self.target_center_y = self.last_known_subject_cy
+            # No face detected and no active action: return to Center if not already there
+            if self.committed_zone != Zone.CENTER:
+                desired_zone = Zone.CENTER
+                desired_center = get_zone_nominal_center(Zone.CENTER, self.orig_w, self.config)
             else:
-                # Subject memory expired: smoothly return to Center if not already there
-                if self.committed_zone != Zone.CENTER:
-                    desired_zone = Zone.CENTER
-                    desired_center = get_zone_nominal_center(Zone.CENTER, self.orig_w, self.config)
+                desired_center = self.anchor_center_x
+                desired_zone = self.committed_zone
+
+        # 3. Anchor & Dwell Decision with Strict Tripod Lock
+        dist_from_anchor = abs(desired_center - self.anchor_center_x)
+
+        if dist_from_anchor <= deadzone_px or in_dwell_period:
+            # Within deadzone OR still within mandatory dwell time:
+            # Camera MUST REMAIN STRICTLY LOCKED (Zero pan / Tripod Lock)
+            self.pending_anchor_x = None
+            self.pending_anchor_count = 0
+            self.target_center_x = self.anchor_center_x
+            if not self.is_panning:
+                self.current_center_x = self.anchor_center_x
+        else:
+            # Outside deadzone AND past dwell time:
+            if (self.pending_anchor_x is not None
+                    and abs(desired_center - self.pending_anchor_x) <= deadzone_px):
+                self.pending_anchor_count += 1
+            else:
+                self.pending_anchor_x = desired_center
+                self.pending_anchor_count = 1
+
+            confirm_threshold = getattr(self.config, 'jump_confirm_frames', 1)
+            if self.pending_anchor_count >= confirm_threshold:
+                # Confirmed move! Check voice corroboration for side zones if not an action override
+                is_corroborated = True
+                candidate_zone = get_zone_for_x(self.pending_anchor_x, self.orig_w, self.config)
+                if not is_action_override and candidate_zone in (Zone.LEFT, Zone.RIGHT) and self.config.speech_energy_min_duration > 0.0:
+                    dur_s = self.side_speech_frames[candidate_zone] / self.fps
+                    if dur_s < self.config.speech_energy_min_duration:
+                        is_corroborated = False
+
+                if is_corroborated:
+                    self.committed_zone = candidate_zone
+                    self.last_anchor_switch_frame = frame_idx
+                    self.last_zone_switch_frame = frame_idx
+                    self.anchor_center_x = self._clamp_center(self.pending_anchor_x)
+                    self.target_center_x = self.anchor_center_x
+                    self.pending_anchor_x = None
+                    self.pending_anchor_count = 0
+
+                    if self.config.switch_mode == "cut":
+                        # Discrete studio camera hard cut (1-frame snap)
+                        self.current_center_x = self.target_center_x
+                        self.is_panning = False
+                    elif self.config.switch_mode == "pan":
+                        # 12-18 frame intentional cubic pan
+                        self.pan_start_frame = frame_idx
+                        self.pan_start_x = self.current_center_x
+                        self.pan_target_x = self.target_center_x
+                        self.is_panning = True
+
+                    # Check for rapid conversational turn-taking
+                    is_rapid = self.turn_monitor.record_speaker_switch(
+                        frame_idx, self.committed_zone, self.fps
+                    )
+                    if is_rapid:
+                        self.rapid_dialogue_active = True
                 else:
-                    desired_center = self.anchor_center_x
-                    desired_zone = self.committed_zone
+                    self.target_center_x = self.anchor_center_x
+                    if not self.is_panning:
+                        self.current_center_x = self.anchor_center_x
+            else:
+                # Still confirming move, hold anchor
+                self.target_center_x = self.anchor_center_x
+                if not self.is_panning:
+                    self.current_center_x = self.anchor_center_x
 
-        # 3. Dynamic Camera Tracking & Safe-Zone Aware Following
-        deadzone_px = self.crop_w * 0.07  # Dynamic deadband: ±7% of 9:16 crop width
-        deadzone_py = self.crop_h * 0.07  # Dynamic vertical deadband: ±7%
-
-        # Check if this is a discrete multi-speaker switch to a different zone
-        is_multi_speaker_switch = (
-            len(face_candidates or []) > 1 and
-            active_speaker_idx is not None and
-            desired_zone != self.committed_zone and
-            not is_action_override
-        )
-
+        # 4. Motion Execution & Stabilization
         prev_cx = self.current_center_x
         max_step = self.orig_w * self.config.max_pan_velocity_ratio
 
-        if is_multi_speaker_switch and in_dwell_period:
-            # Hold previous camera anchor during multi-speaker turn dwell
-            self.target_center_x = self.anchor_center_x
-        else:
-            diff_x = desired_center - self.current_center_x
-            if abs(diff_x) <= deadzone_px:
-                # Subject micro-movements within ±7% deadband: keep camera stationary (solid tripod)
-                self.target_center_x = self.current_center_x
+        if self.is_panning:
+            pan_frames = max(1, self.config.pan_frames)
+            elapsed = frame_idx - self.pan_start_frame + 1
+            if elapsed >= pan_frames:
+                self.is_panning = False
+                self.current_center_x = self.pan_target_x
             else:
-                # Subject moving across deadband: smoothly track with Exponential Moving Average (EMA)
-                self.target_center_x = desired_center
-                self.anchor_center_x = desired_center
-                self.committed_zone = desired_zone
-                alpha = max(0.08, min(0.12, getattr(self, 'ema_alpha', 0.10)))
-                step_x = (diff_x - math.copysign(deadzone_px, diff_x)) * alpha
-                self.current_center_x += step_x
+                t = min(1.0, max(0.0, elapsed / float(pan_frames)))
+                cubic_t = t * t * (3.0 - 2.0 * t)
+                self.current_center_x = self.pan_start_x + (self.pan_target_x - self.pan_start_x) * cubic_t
+        elif self.config.switch_mode == "cut":
+            # In cut mode, once anchored, camera is 100% frozen stationary at anchor
+            self.current_center_x = self.anchor_center_x
+        else:
+            dist = abs(self.target_center_x - self.current_center_x)
+            if dist < 1.0:
+                self.current_center_x = self.target_center_x
+            elif dist > (self.orig_w * self.config.snap_distance_ratio):
+                self.current_center_x = self.target_center_x
+            else:
+                self.current_center_x = (
+                    self.ema_alpha * self.target_center_x +
+                    (1.0 - self.ema_alpha) * self.current_center_x
+                )
 
-        # Velocity Clamping for X (prevent whipping)
+        # Clamp per-frame X velocity to max_pan_velocity_ratio (prevent whipping)
         delta_x = self.current_center_x - prev_cx
         if abs(delta_x) > max_step:
             self.current_center_x = prev_cx + math.copysign(max_step, delta_x)
 
-        # Safe-Zone Aware Auto-Reframing (Platform UI Collision Guard)
-        # Safe Envelope: X in 12% - 78%, Y in 15% - 70%
-        crop_x0 = self.current_center_x - self.crop_w / 2.0
-        crop_y0 = self.current_center_y - self.crop_h / 2.0
-
-        norm_subj_x = (desired_center - crop_x0) / max(1.0, float(self.crop_w))
-        norm_subj_y = (self.target_center_y - crop_y0) / max(1.0, float(self.crop_h))
-
-        # Right-Rail Avoidance: ensure subject face never sits under right action buttons (X > 78%)
-        if norm_subj_x > 0.78:
-            self.current_center_x += (norm_subj_x - 0.78) * self.crop_w
-        elif norm_subj_x < 0.12:
-            self.current_center_x -= (0.12 - norm_subj_x) * self.crop_w
-
-        # Headroom Protection: maintain comfortable headroom (Y: 18%-25%), avoid top header
-        if norm_subj_y < 0.18:
-            self.current_center_y -= (0.18 - norm_subj_y) * self.crop_h
-        elif norm_subj_y > 0.70:
-            self.current_center_y += (norm_subj_y - 0.70) * self.crop_h
-
-        # Apply soft boundary deceleration (smooth edge approach)
+        # Apply soft boundary deceleration (smooth edge approach, no jarring stop)
         self.current_center_x = self._apply_soft_boundary(self.current_center_x, prev_cx)
 
         # Y-axis: EMA + velocity clamp + soft boundary

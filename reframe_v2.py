@@ -401,23 +401,13 @@ def _analyze_trajectory(input_video, scenes_boundaries, scene_strategies,
                                 candidates.insert(0, {'box': target_box, 'score': 100000})
                                 active_idx = 0
 
-                    # Detect contextual text regions (titles, graphics, slides, labels)
-                    raw_text_regions = m.detect_contextual_text_regions(frame)
-                    scaled_text_regions = []
-                    for tr in raw_text_regions:
-                        tb = tr['box']
-                        scaled_text_regions.append({
-                            'box': (int(tb[0] * scale), int(tb[1] * scale), int(tb[2] * scale), int(tb[3] * scale))
-                        })
-
                 if use_three_zone and three_zone_engine:
                     x1, _y1, _cw, _ch = three_zone_engine.update_frame(
                         frame_idx=frame_number,
                         face_candidates=candidates if candidates else None,
                         active_speaker_idx=active_idx,
                         frame_image=frame,
-                        force_snap=is_scene_start,
-                        text_regions=scaled_text_regions if 'scaled_text_regions' in locals() else None
+                        force_snap=is_scene_start
                     )
                     cameraman.current_center_x = x1 + cameraman.crop_width / 2.0
                     cameraman.target_center_x = cameraman.current_center_x
@@ -524,7 +514,7 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
                 print(f"   🔇 Scene {scene_idx}: one speaker holds the floor "
                       f"({max(a, b):.0%}) — not stacking")
                 del splits[start_f]
-                strategies[scene_idx] = 'GENERAL'
+                strategies[scene_idx] = 'TRACK'
             elif active_speaker.CUT_MODE:
                 strategies[scene_idx] = 'ALTERNATE'
                 alternates[start_f] = (

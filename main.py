@@ -654,6 +654,53 @@ def detect_contextual_text_regions(frame):
     text_regions.sort(key=lambda t: t['score'], reverse=True)
     return text_regions
 
+
+def is_scene_text_presentation(frames):
+    """
+    Checks if a scene with ZERO performers genuinely contains wide presentation slide,
+    screencast, or text document elements that require the full-width text-capturing style.
+    Returns True only when structured text lines / wide slide headlines are detected.
+    """
+    if not frames:
+        return False
+
+    slide_votes = 0
+    for frame in frames:
+        h, w = frame.shape[:2]
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        # High-contrast horizontal edges typical of text lines
+        grad_x = cv2.convertScaleAbs(cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3))
+        # Morphological closing along horizontal axis to group letters into words/lines
+        kernel_h = cv2.getStructuringElement(cv2.MORPH_RECT, (max(9, int(w * 0.035)), 3))
+        morph = cv2.morphologyEx(grad_x, cv2.MORPH_CLOSE, kernel_h)
+        _, thresh = cv2.threshold(morph, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        # Further group into text lines
+        kernel_line = cv2.getStructuringElement(cv2.MORPH_RECT, (max(15, int(w * 0.06)), 3))
+        thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel_line)
+
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        text_lines = 0
+        has_wide_headline = False
+        for cnt in contours:
+            x, y, cw, ch = cv2.boundingRect(cnt)
+            aspect = cw / float(max(1, ch))
+            # Text line characteristics: horizontal aspect ratio, bounded height
+            if aspect >= 2.5 and int(h * 0.015) <= ch <= int(h * 0.20):
+                if cw >= int(w * 0.15):
+                    text_lines += 1
+                if cw >= int(w * 0.50):
+                    has_wide_headline = True
+
+        # Pure text slides / screencasts typically feature a wide headline and multiple text lines
+        if (has_wide_headline and text_lines >= 2) or text_lines >= 4:
+            slide_votes += 1
+
+    return slide_votes >= max(1, (len(frames) + 1) // 2)
+
+
 def create_general_frame(frame, output_width, output_height):
     """
     Creates a 'General Shot' frame: 
@@ -738,7 +785,7 @@ def analyze_scenes_strategy(video_path, scenes):
                 ))
 
                 face_counts = []
-                wide_text_count = 0
+                no_face_frames = []
                 for f_idx in frames_to_check:
                     cap.set(cv2.CAP_PROP_POS_FRAMES, f_idx)
                     ret, frame = cap.read()
@@ -749,31 +796,33 @@ def analyze_scenes_strategy(video_path, scenes):
                     if frame.mean() < 16:
                         continue
 
-                    # Detect faces and people (profile faces / side characters)
+                    # Detect faces and people (solo performer, 2-3 performers, side characters)
                     candidates = detect_face_candidates(frame)
                     if not candidates:
                         people = detect_people_yolo(frame)
                         candidates = people
                     face_counts.append(len(candidates))
+                    if not candidates:
+                        no_face_frames.append(frame)
 
-                    # Contextual text detection: detect wide banners, titles, slides, lower-thirds
-                    text_regs = detect_contextual_text_regions(frame)
-                    if text_regs and any(t['box'][2] > frame.shape[1] * 0.50 for t in text_regs):
-                        wide_text_count += 1
-
-                # Decision Logic
+                # Decision Logic:
+                # 1. When performers are present (solo, 2, or 3 performers):
+                #    Always TRACK for full-screen 9:16 vertical crop with intelligent camera tracking.
+                #    No blur bars upside and downward!
+                # 2. "Text capturing video editing style" (GENERAL / blurred background) is ONLY used
+                #    when the scene specifically contains genuine text elements (presentation slides,
+                #    screencasts, text documents) and ZERO performers are present.
                 avg_faces = sum(face_counts) / len(face_counts) if face_counts else 0
-                has_wide_text = wide_text_count >= 2
-
-                # Strategy:
-                # Wide contextual text -> GENERAL (preserves full text without side cropping)
-                # 0 faces -> GENERAL (Landscape/B-roll)
-                # 1-2 faces -> TRACK (smart one-shot or two-shot framing)
-                # > 2.2 faces -> GENERAL (Broad crowd / wide group)
-                if has_wide_text or avg_faces > 2.2 or avg_faces < 0.5:
-                    strategies.append('GENERAL')
-                else:
+                if avg_faces >= 0.2:
+                    # 1, 2, or 3 people performing -> full-screen 9:16 dynamic tracking
                     strategies.append('TRACK')
+                else:
+                    # 0 performers: check if scene actually contains genuine text presentation/slide elements
+                    if is_scene_text_presentation(no_face_frames):
+                        strategies.append('GENERAL')
+                    else:
+                        # Landscape / B-roll with no text -> full-screen 9:16 crop like before
+                        strategies.append('TRACK')
     except Exception as e:
         print(f"   ⚠️ Could not analyze scene strategy: {e}")
         return ['TRACK'] * len(scenes)
