@@ -420,19 +420,30 @@ CAPTION_STYLE_PRESETS = {
 }
 
 
-def get_caption_style(name: str = None) -> dict:
+def get_caption_style(name: str = None, overrides: dict = None) -> dict:
     """Returns the style dictionary for a given preset name.
     Falls back to AUTO_CAPTION_STYLE if name is None or not found.
+    Accepts an optional overrides dictionary for custom font, colors, positioning, etc.
     """
     if not name:
-        return AUTO_CAPTION_STYLE.copy()
-    cleaned = str(name).strip().lower().replace(" ", "_").replace("-", "_")
-    if cleaned in CAPTION_STYLE_PRESETS:
-        return CAPTION_STYLE_PRESETS[cleaned].copy()
-    for key, val in CAPTION_STYLE_PRESETS.items():
-        if key in cleaned:
-            return val.copy()
-    return AUTO_CAPTION_STYLE.copy()
+        base = AUTO_CAPTION_STYLE.copy()
+    else:
+        cleaned = str(name).strip().lower().replace(" ", "_").replace("-", "_")
+        if cleaned in CAPTION_STYLE_PRESETS:
+            base = CAPTION_STYLE_PRESETS[cleaned].copy()
+        else:
+            base = AUTO_CAPTION_STYLE.copy()
+            for key, val in CAPTION_STYLE_PRESETS.items():
+                if key in cleaned:
+                    base = val.copy()
+                    break
+
+    if overrides and isinstance(overrides, dict):
+        for k, v in overrides.items():
+            if v is not None and v != "":
+                base[k] = v
+
+    return base
 
 
 def _ass_time(seconds):
@@ -506,6 +517,9 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
     if not blocks:
         return False
 
+    align_map = {'top': 8, 'middle': 5, 'bottom': 2}
+    ass_alignment = align_map.get(str(alignment).lower(), 2)
+
     # Dynamic Collision Avoidance & Safe Zones for burned ASS
     if has_burned_in_captions:
         if collision_mode == 'smart_reposition':
@@ -518,17 +532,37 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
         elif collision_mode == 'manual_offset' and manual_y_offset is not None:
             try:
                 offset_pct = float(manual_y_offset)
-                margin_v = int(round(max(5.0, min(95.0, (100.0 - offset_pct))) / 100.0 * 288))
+                if offset_pct <= 40:
+                    ass_alignment = 8
+                    margin_v = int(round(offset_pct / 100.0 * 288))
+                else:
+                    ass_alignment = 2
+                    margin_v = int(round((100.0 - offset_pct) / 100.0 * 288))
             except Exception:
                 pass
+    elif manual_y_offset is not None:
+        # User explicitly dragged / positioned captions anywhere on the canvas
+        try:
+            offset_pct = float(manual_y_offset)
+            if offset_pct <= 40:
+                ass_alignment = 8
+                margin_v = int(round(offset_pct / 100.0 * 288))
+            else:
+                ass_alignment = 2
+                margin_v = int(round((100.0 - offset_pct) / 100.0 * 288))
+        except Exception:
+            pass
+    elif str(alignment).lower() == 'top':
+        ass_alignment = 8
+        margin_v = int(round(0.12 * 288))
+    elif str(alignment).lower() == 'middle':
+        ass_alignment = 2
+        margin_v = int(round(0.48 * 288))
 
     # Match the SRT burn path: PlayResY 288 keeps font sizes consistent.
     final_fontsize = int(_clamp_number(fontsize, 10, 200, 16) * 0.85)
     if final_fontsize < 10:
         final_fontsize = 10
-
-    align_map = {'top': 8, 'middle': 5, 'bottom': 2}
-    ass_alignment = align_map.get(str(alignment).lower(), 2)
 
     # On a SPLIT scene the two speakers are stacked and the seam between the
     # halves (exactly mid-frame) is the one place the text covers nobody, so
@@ -600,7 +634,7 @@ def generate_ass(transcript, clip_start, clip_end, output_path,
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
         f"Style: Default,{safe_font},{final_fontsize},{primary_colour},{primary_colour},"
         f"{outline_colour},{back_colour},1,0,0,0,100,100,0,0,{border_style},"
-        f"{outline_width},0,{ass_alignment},{safe_margin_l},{safe_margin_r},{int(_clamp_number(margin_v, 0, 200, SAFE_MARGIN_V))},1\n"
+        f"{outline_width},0,{ass_alignment},{safe_margin_l},{safe_margin_r},{int(_clamp_number(margin_v, 0, 275, SAFE_MARGIN_V))},1\n"
         "\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"

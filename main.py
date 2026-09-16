@@ -1160,10 +1160,28 @@ def mix_background_audio(video_path: str, bg_audio_path: str, clip_index: int, t
 
 def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=None, subtitle_style=None):
     """Burns timed, word-highlight subtitles into ``clip_path``.
+    Supports global preset styles and custom draggable coordinates.
     """
     if os.environ.get("AUTO_CAPTIONS", "1").strip() == "0":
         return None
-    chosen_style = subtitle_style or os.environ.get("AUTO_CAPTION_STYLE") or "shorts"
+
+    custom_config = {}
+    env_config_raw = os.environ.get("AUTO_CAPTION_CONFIG")
+    if env_config_raw:
+        try:
+            custom_config = json.loads(env_config_raw)
+        except Exception:
+            pass
+
+    # Extract manual_y_offset: check custom_config first, then env var
+    manual_y = custom_config.get("manual_y_offset")
+    if manual_y is None and os.environ.get("AUTO_CAPTION_Y_OFFSET"):
+        try:
+            manual_y = float(os.environ.get("AUTO_CAPTION_Y_OFFSET"))
+        except Exception:
+            pass
+
+    chosen_style = subtitle_style or custom_config.get("style") or os.environ.get("AUTO_CAPTION_STYLE") or "shorts"
     if str(chosen_style).lower() in ("none", "off", "0", "false"):
         return None
     if not transcript or not transcript.get('segments'):
@@ -1172,32 +1190,10 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=
     ass_path = None
     try:
         import subtitles as _subs
-        style = _subs.get_caption_style(chosen_style)
+        style = _subs.get_caption_style(chosen_style, overrides=custom_config)
         output_dir = os.path.dirname(clip_path)
         stem = os.path.basename(clip_path)
         generation_id = int(time.time())
-        # The output name MUST stay exactly "subtitled_<ts>_<clip filename>":
-        # the modal's walk-back and _canonical_clip_file both reconstruct the
-        # clean original from it, so trimming the stem here would orphan the
-        # pair. Length is bounded upstream instead, by MAX_TITLE_BYTES at
-        # download time. A legacy clip whose name predates that budget can still
-        # overflow — that raises OSError 36, which the except below turns into
-        # "ship the clip uncaptioned" rather than a broken filename.
-        # The .ass path is interpolated INTO an ffmpeg filter string
-        # (-vf ass='...'), where a literal apostrophe closes the quote and
-        # breaks the filter. Titles carry apostrophes constantly in English
-        # ("Earth's", "Don't"), so this name must stay free of the clip stem —
-        # which is exactly why /api/subtitle has always used a neutral
-        # "subs_<i>_<ts>.ass". Deriving it from the stem silently cost captions
-        # on every apostrophe title until 29-jul-2026.
-        #
-        # The OUTPUT name still carries the stem, and must: the modal's
-        # walk-back and _canonical_clip_file reconstruct the clean original
-        # from it. That one is only ever passed as an argv element, never
-        # inside a filter string, so quoting never applies to it.
-        # Unique per clip, not just per second: clips render in parallel
-        # (CLIP_WORKERS), so a bare timestamp would collide and let one clip
-        # burn another's captions.
         ass_path = os.path.join(
             output_dir, f"autosubs_{generation_id}_{uuid.uuid4().hex[:8]}.ass")
         out_path = os.path.join(output_dir, f"subtitled_{generation_id}_{stem}")
@@ -1208,20 +1204,24 @@ def auto_caption_clip(clip_path, transcript, clip_start, clip_end, split_ranges=
         if not _subs.generate_ass(
                 transcript, clip_start, clip_end, ass_path,
                 split_ranges=split_ranges,
-                max_chars=style["max_chars"], max_duration=style["max_duration"],
-                alignment=style["alignment"], fontsize=style["font_size"],
-                font_name=style["font_name"], font_color=style["font_color"],
-                border_color=style["border_color"], border_width=style["border_width"],
-                highlight_color=style["highlight_color"], effect=style["effect"],
-                base_opacity=style["base_opacity"], uppercase=style["uppercase"]):
+                max_chars=style.get("max_chars", 18), max_duration=style.get("max_duration", 1.5),
+                alignment=style.get("alignment", "bottom"), fontsize=style.get("font_size", 40),
+                font_name=style.get("font_name", "Verdana"), font_color=style.get("font_color", "#FFFFFF"),
+                border_color=style.get("border_color", "#000000"), border_width=style.get("border_width", 3),
+                highlight_color=style.get("highlight_color", "#FFD700"),
+                bg_color=style.get("bg_color", "#000000"), bg_opacity=style.get("bg_opacity", 0.0),
+                effect=style.get("effect", "none"),
+                base_opacity=style.get("base_opacity", 1.0), uppercase=style.get("uppercase", False),
+                manual_y_offset=manual_y):
             print("   ℹ️ No words in range — clip ships without captions.")
             return None
 
         _subs.burn_subtitles(
             clip_path, ass_path, out_path,
-            alignment=style["alignment"], fontsize=style["font_size"],
-            font_name=style["font_name"], font_color=style["font_color"],
-            border_color=style["border_color"], border_width=style["border_width"])
+            alignment=style.get("alignment", "bottom"), fontsize=style.get("font_size", 40),
+            font_name=style.get("font_name", "Verdana"), font_color=style.get("font_color", "#FFFFFF"),
+            border_color=style.get("border_color", "#000000"), border_width=style.get("border_width", 3),
+            bg_color=style.get("bg_color", "#000000"), bg_opacity=style.get("bg_opacity", 0.0))
         print(f"   💬 Captions burned: {os.path.basename(out_path)}")
         return out_path
     except Exception as e:

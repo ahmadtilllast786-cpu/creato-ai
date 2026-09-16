@@ -885,6 +885,9 @@ function App() {
         // 'auto' is the server default, so only a deliberate choice travels.
         layouts: data.layout && data.layout !== 'auto' ? data.layout : null,
         subtitle_style: data.subtitleStyle || null,
+        subtitle_y_offset: data.subtitleYOffset != null ? String(data.subtitleYOffset) : null,
+        subtitle_position: data.subtitlePosition || null,
+        subtitle_config: data.subtitleConfig ? JSON.stringify(data.subtitleConfig) : null,
         bg_audio_volume: data.bgAudioVolume != null ? String(data.bgAudioVolume) : null,
         fresh_clips: data.freshClips ? '1' : '0',
       };

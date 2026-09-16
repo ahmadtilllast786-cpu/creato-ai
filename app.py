@@ -2353,6 +2353,9 @@ async def process_endpoint(
     bg_audio: Optional[UploadFile] = File(None),
     bg_audio_volume: Optional[str] = Form(None),
     subtitle_style: Optional[str] = Form(None),
+    subtitle_y_offset: Optional[str] = Form(None),
+    subtitle_position: Optional[str] = Form(None),
+    subtitle_config: Optional[str] = Form(None),
     fresh_clips: Optional[str] = Form(None),
 ):
     api_key = await resolve_gemini(request)
@@ -2393,6 +2396,9 @@ async def process_endpoint(
         upload_id = body.get("upload_id")
         bg_audio_volume = body.get("bg_audio_volume") or bg_audio_volume
         subtitle_style = body.get("subtitle_style") or subtitle_style
+        subtitle_y_offset = body.get("subtitle_y_offset") or subtitle_y_offset
+        subtitle_position = body.get("subtitle_position") or subtitle_position
+        subtitle_config = body.get("subtitle_config") or subtitle_config
         fresh_clips = body.get("fresh_clips") or fresh_clips
 
     # Normalize output format (auto = keep pipeline default).
@@ -2670,12 +2676,22 @@ async def process_endpoint(
                 pass
         print(f"[bg-audio] job={job_id} file={safe_bg} vol={bg_audio_volume or 0.18}")
 
-    # Optional Pre-Selected Subtitle Style
+    # Subtitle Style and Custom Draggable Coordinates Configuration
     if subtitle_style:
         sub_preset = str(subtitle_style).strip().lower()
         env["AUTO_CAPTION_STYLE"] = sub_preset
         cmd.extend(["--subtitle-style", sub_preset])
         print(f"[subtitles] job={job_id} style={sub_preset}")
+    if subtitle_y_offset is not None and str(subtitle_y_offset).strip() != "":
+        env["AUTO_CAPTION_Y_OFFSET"] = str(subtitle_y_offset).strip()
+        print(f"[subtitles] job={job_id} y_offset={subtitle_y_offset}%")
+    if subtitle_position:
+        env["AUTO_CAPTION_POSITION"] = str(subtitle_position).strip().lower()
+    if subtitle_config:
+        if isinstance(subtitle_config, dict):
+            env["AUTO_CAPTION_CONFIG"] = json.dumps(subtitle_config)
+        else:
+            env["AUTO_CAPTION_CONFIG"] = str(subtitle_config)
 
     # Force fresh clip extraction (bypass cached moments)
     if fresh_clips and str(fresh_clips).lower() in ("1", "true", "yes"):
