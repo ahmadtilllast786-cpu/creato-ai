@@ -20,6 +20,7 @@ so they stay unit-testable in CI.
 import os
 import subprocess
 import tempfile
+import uuid
 
 import active_speaker
 import camera_inset
@@ -30,7 +31,7 @@ import split_layout
 from tracking import stabilize_crop_path
 from ffmpeg_utils import (video_encode_args, escape_filter_value, QUALITY_FAST,
                           BROADCAST, METADATA_SCRUB, run_ffmpeg_command, open_video_capture,
-                          ensure_file_unlocked, cleanup_temp_file)
+                          ensure_file_unlocked, cleanup_temp_file, safe_replace)
 
 ANALYSIS_MAX_WIDTH = 640
 
@@ -391,9 +392,11 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
     the ones the tracker got right. Applied AFTER force_strategy: a per-scene
     hand position always beats the whole-clip choice for the scenes it names.
     """
-    if not input_video or not os.path.exists(input_video) or os.path.getsize(input_video) == 0:
+    if not input_video:
+        raise FileNotFoundError("Input video path is empty or None")
+    ensure_file_unlocked(input_video, timeout=15)
+    if not os.path.exists(input_video) or os.path.getsize(input_video) == 0:
         raise FileNotFoundError(f"Input video does not exist or is empty: {input_video}")
-    ensure_file_unlocked(input_video)
     import main as m
     content_ranges = content_ranges or []
 
@@ -652,6 +655,10 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
             ])
             segments.append(seg_path)
 
+        staging_final = final_output_video + f".staging_{uuid.uuid4().hex[:6]}.mp4"
+        if os.path.exists(staging_final):
+            cleanup_temp_file(staging_final)
+
         if len(segments) == 1:
             # Single continuous segment: mux directly with input audio without an intermediate concat list.
             _run([
@@ -661,7 +668,7 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
                 "-map", "0:v:0", "-map", "1:a:0?",
                 "-c:v", "copy", "-c:a", "copy", *METADATA_SCRUB,
                 "-movflags", "+faststart",
-                final_output_video,
+                staging_final,
             ])
         else:
             list_path = os.path.join(workdir, "concat.txt")
@@ -678,8 +685,18 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
                 # +faststart moves the moov atom to the front so the browser <video>
                 # can start playing before the whole file downloads.
                 "-movflags", "+faststart",
-                final_output_video,
+                staging_final,
             ])
+
+        ensure_file_unlocked(staging_final, timeout=15)
+        if not (os.path.exists(staging_final) and os.path.getsize(staging_final) > 0):
+            raise RuntimeError(f"Rendered staging file is missing or 0 bytes: {staging_final}")
+
+        if not safe_replace(staging_final, final_output_video):
+            import shutil
+            cleanup_temp_file(final_output_video)
+            shutil.move(staging_final, final_output_video)
+        ensure_file_unlocked(final_output_video, timeout=15)
     finally:
         import shutil
         shutil.rmtree(workdir, ignore_errors=True)

@@ -26,6 +26,7 @@ from ffmpeg_utils import (
 @pytest.fixture(autouse=True)
 def _clean_encoder_state(monkeypatch):
     monkeypatch.delenv("FFMPEG_ENCODER", raising=False)
+    monkeypatch.setattr(ffmpeg_utils, "_probe_nvenc", lambda: False)
     reset_encoder_cache()
     yield
     reset_encoder_cache()
@@ -35,7 +36,7 @@ def test_default_args_pin_historical_x264_settings():
     assert video_encode_args(QUALITY) == [
         "-c:v", "libx264", "-preset", "medium", "-crf", "18"]
     assert video_encode_args(QUALITY_FAST) == [
-        "-c:v", "libx264", "-preset", "fast", "-crf", "18"]
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20"]
     assert video_encode_args(DELIVERY) == [
         "-c:v", "libx264", "-preset", "fast", "-crf", "22"]
     assert video_encode_args(BROADCAST) == [

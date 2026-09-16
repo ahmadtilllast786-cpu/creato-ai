@@ -1547,10 +1547,13 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
     3. FFmpeg Filter Structure:
        [0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5[bg];[0:v]scale=1080:-2[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2
     """
-    if not input_video or not os.path.exists(input_video) or os.path.getsize(input_video) == 0:
+    if not input_video:
+        print(f"   ⚠️ Input video path is empty or None — skipping vertical reframe.")
+        return False
+    ensure_file_unlocked(input_video, timeout=15)
+    if not os.path.exists(input_video) or os.path.getsize(input_video) == 0:
         print(f"   ⚠️ Input video {input_video} does not exist or is empty — skipping vertical reframe.")
         return False
-    ensure_file_unlocked(input_video)
 
     reframe_style = os.environ.get("REFRAME_STYLE", "auto").strip().lower()
     # Dynamic Face Tracking Vertical Reframe (or manual scene crop overrides from editor UI)
@@ -1561,11 +1564,10 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
             result = reframe_v2.render(input_video, final_output_video, aspect_ratio,
                                        force_strategy=force_strategy,
                                        crop_overrides=crop_overrides)
-            print(f"   ⏱️ Dynamic face tracking reframe total: {time.time() - t0:.1f}s")
-            return result
-        except FileNotFoundError as fnf:
-            print(f"   ⚠️ Face tracking reframe skipped: {fnf}")
-            return False
+            if result and os.path.exists(final_output_video) and os.path.getsize(final_output_video) > 0:
+                print(f"   ⏱️ Dynamic face tracking reframe total: {time.time() - t0:.1f}s")
+                return result
+            print(f"   ⚠️ Dynamic face tracking reframe produced empty or missing output — falling back to blurred background fill")
         except Exception as e:
             if crop_overrides:
                 raise RuntimeError(
@@ -2599,13 +2601,15 @@ if __name__ == '__main__':
                     # ffmpeg cut — re-encoding for precision on strict seconds.
                     # Initial cut is serialized across workers to prevent concurrent
                     # read conflicts on input_video on Windows.
-                    dur = max(0.1, float(end) - float(start))
+                    dur = max(1.0, float(end) - float(start))
                     cut_command = [
                         'ffmpeg', '-y',
                         '-ss', f"{float(start):.3f}",
                         '-i', input_video,
                         '-t', f"{dur:.3f}",
                         '-avoid_negative_ts', 'make_zero',
+                        '-map', '0:v:0',
+                        '-map', '0:a:0?',
                         *video_encode_args(QUALITY_FAST),
                         *audio_encode_args(),
                         clip_temp_path

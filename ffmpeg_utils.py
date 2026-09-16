@@ -295,18 +295,30 @@ def open_video_capture(path):
     """
     import cv2
     import gc
-    if not path or not os.path.exists(path) or os.path.getsize(path) == 0:
+    if not path:
+        raise FileNotFoundError("Video file path is empty or None")
+    ensure_file_unlocked(path, timeout=10)
+    if not os.path.exists(path) or os.path.getsize(path) == 0:
         raise FileNotFoundError(f"Video file does not exist or is empty: {path}")
-    cap = cv2.VideoCapture(path, cv2.CAP_FFMPEG)
-    if not cap.isOpened():
-        cap = cv2.VideoCapture(path)
-    try:
+
+    cap = None
+    for attempt in range(3):
+        cap = cv2.VideoCapture(path, cv2.CAP_FFMPEG)
         if not cap.isOpened():
+            cap = cv2.VideoCapture(path)
+        if cap.isOpened():
+            break
+        time.sleep(0.2)
+        gc.collect()
+
+    try:
+        if not cap or not cap.isOpened():
             raise IOError(f"Cannot open video: {path}")
         yield cap
     finally:
-        cap.release()
-        del cap
+        if cap is not None:
+            cap.release()
+            del cap
         gc.collect()
 
 
@@ -322,10 +334,16 @@ def ensure_file_unlocked(filepath, timeout=15):
                 with open(filepath, 'a+b'):
                     return True
             except (PermissionError, IOError):
+                # Check if readable at least
+                try:
+                    with open(filepath, 'rb'):
+                        return True
+                except Exception:
+                    pass
                 time.sleep(0.3)
         else:
             time.sleep(0.3)
-    return False
+    return bool(filepath and os.path.exists(filepath) and os.path.getsize(filepath) > 0)
 
 
 def cleanup_temp_file(filepath, retries=5, delay=0.5):
