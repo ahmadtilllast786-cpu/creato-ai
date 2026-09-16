@@ -361,6 +361,10 @@ def _analyze_trajectory(input_video, scenes_boundaries, scene_strategies,
                     for cand in candidates:
                         cand['box'] = [int(v * scale) for v in cand['box']]
                         cand['score'] = cand['box'][2] * cand['box'][3]
+                        if 'eye_line' in cand:
+                            cand['eye_line'] = [v * scale for v in cand['eye_line']]
+                        if 'focal_anchor' in cand:
+                            cand['focal_anchor'] = [v * scale for v in cand['focal_anchor']]
                     target_box = tracker.get_target(candidates, frame_number, orig_w, orig_h)
                     active_idx = None
                     if target_box:

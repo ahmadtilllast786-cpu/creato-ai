@@ -1,5 +1,6 @@
 import ffmpeg_env
 import time
+import math
 import cv2
 import subprocess
 import argparse
@@ -134,156 +135,134 @@ class SmoothedCameraman:
              self.crop_width = video_width
              self.crop_height = int(self.crop_width / aspect_ratio)
              
-        # Safe Zone: Widened ±15% of video width
-        # As long as the target is within this zone relative to current center, DO NOT MOVE.
-        self.safe_zone_radius = max(self.crop_width * 0.25, self.video_width * 0.15)
+        # Dynamic Dead-Zone (Hysteresis): ±7% of screen dimension
+        # Micro-movements within this zone keep the camera smooth and stationary
+        self.deadzone_x = self.crop_width * 0.07
+        self.deadzone_y = self.crop_height * 0.07
 
+        # Exponential Moving Average (EMA) smoothing parameters
+        self.smoothing_factor_x = 0.10  # Damped camera following (0.08 - 0.12)
+        self.smoothing_factor_y = 0.08
+        self.max_step_x = self.video_width * 0.030  # Velocity clamping: max 3.0% pan per frame
+        self.max_step_y = self.video_height * 0.030
+        self.target_headroom = 0.22  # Comfortable 18%-25% headroom from top
+
+        self.current_center_x = video_width / 2.0
+        self.target_center_x = video_width / 2.0
         self.current_center_y = video_height / 2.0
         self.target_center_y = video_height / 2.0
 
-        # A target that teleports further than the safe zone in one detection is
-        # far more often a detector error — a second face, a false positive, a
-        # box snapping to a different body part — than a person who actually
-        # moved that far. Committing to it immediately is what made the camera
-        # swing: measured on real user footage, 22% of target updates jumped
-        # more than the entire safe zone. So a big move has to REPEAT this many
-        # times before the camera follows it; a wrong reading disappears on the
-        # next detection and never moves the frame.
-        #
-        # The cost is latency on a genuinely fast move: at DETECT_STRIDE=2 and
-        # 30fps, three confirmations is ~0.4s. That reads as an operator being
-        # unhurried, which is the look we want, and it is far cheaper than the
-        # whip-panning it replaces.
-        #
-        # Measured over 262s of TRACK footage from two real user videos
-        # (26-jul-2026), confirm=1 -> 3: in-scene reversals 0.41/s -> 0.13/s
-        # (-69%), camera travel 91px/s -> 60px/s (-34%). Per scene, 54 of 84 get
-        # calmer and 23 are unchanged — but 7 get BUSIER, up to 59 -> 108px/s,
-        # because committing later can leave the camera further to travel. Net
-        # strongly positive, not universally so.
         self.jump_confirm_frames = JUMP_CONFIRM_FRAMES
         self._pending_target = None
         self._pending_count = 0
-        self._snap_pending = False
+        self._snap_pending = True
 
     def begin_scene(self):
-        """Forget the previous shot's subject at a scene cut.
-
-        The jump damping above exists to reject detector noise INSIDE a shot.
-        Across a cut it does the opposite of what is wanted: the new shot's face
-        is (by construction) far from the old target, so it was held back for
-        JUMP_CONFIRM_FRAMES detections and the camera then panned towards it at
-        pan speed. On a real two-camera podcast (24-aug-2026) that showed up as
-        a headless torso for 1.5s after every cut while the frame slid over to
-        the speaker. The snap at the scene's first frame did not help: the
-        target it snapped to was still the previous shot's.
-
-        So: drop any pending jump, and cut (rather than pan) to the first target
-        accepted in the new shot.
-        """
+        """Forget previous shot's subject at a scene cut and prepare clean pre-alignment."""
         self._pending_target = None
         self._pending_count = 0
         self._snap_pending = True
 
     def update_target(self, face_box):
-        """Update the target centre from a detection, ignoring lone big jumps."""
+        """Update target center with center-of-mass & eye-line tracking."""
         if not face_box:
             return
         x, y, w, h = face_box
-        new_center = x + w / 2
+        # Target subject center of mass / eye-line upper torso
+        target_x = x + w / 2.0
+        target_y = y + h * 0.35
 
-        # Vertical Headroom Alignment: Maintain 20%-30% headroom from top of crop box
-        top_y = y
-        target_headroom = 0.25
-        ideal_center_y = top_y + self.crop_height * (0.5 - target_headroom)
-        half_h = self.crop_height / 2.0
-        self.target_center_y = max(half_h, min(self.video_height - half_h, ideal_center_y))
+        # Vertical Headroom Alignment: Maintain 18%-25% headroom from top of crop box
+        ideal_center_y = y + self.crop_height * (0.5 - self.target_headroom)
+        target_cy = ideal_center_y
 
         if self._snap_pending:
             self._snap_pending = False
             self._pending_target = None
             self._pending_count = 0
-            self.target_center_x = new_center
-            self.current_center_x = new_center
-            self.current_center_y = self.target_center_y
+            self.target_center_x = target_x
+            self.current_center_x = target_x
+            self.target_center_y = target_cy
+            self.current_center_y = target_cy
             return
 
-        if abs(new_center - self.target_center_x) > self.safe_zone_radius:
-            # Same big move as last time? Count it. Otherwise start counting
-            # afresh — two contradictory outliers must not confirm each other.
+        # Outlier rejection for sudden detector teleport spikes (> 50% crop width)
+        if abs(target_x - self.target_center_x) > self.crop_width * 0.5:
             if (self._pending_target is not None
-                    and abs(new_center - self._pending_target) <= self.safe_zone_radius):
+                    and abs(target_x - self._pending_target) <= self.deadzone_x * 2.0):
                 self._pending_count += 1
             else:
-                self._pending_target = new_center
+                self._pending_target = target_x
                 self._pending_count = 1
             if self._pending_count < self.jump_confirm_frames:
-                return  # not convinced yet — hold the frame
+                return  # Confirm outlier before jumping across frame
 
         self._pending_target = None
         self._pending_count = 0
-        self.target_center_x = new_center
+        self.target_center_x = target_x
+        self.target_center_y = target_cy
     
     def get_crop_box(self, force_snap=False):
         """
-        Returns the (x1, y1, x2, y2) for the current frame.
+        Returns (x1, y1, x2, y2) for current frame with smooth EMA tracking,
+        dynamic deadband stabilization, velocity clamping, and safe-zone collision avoidance.
         """
         prev_cx = self.current_center_x
-        prev_cy = getattr(self, 'current_center_y', self.video_height / 2.0)
-        # Max pan velocity: 2.5% of frame width per frame
-        max_step_x = self.video_width * 0.025
-        max_step_y = self.video_height * 0.025
+        prev_cy = self.current_center_y
 
         if force_snap:
             self.current_center_x = self.target_center_x
-            self.current_center_y = getattr(self, 'target_center_y', self.video_height / 2.0)
+            self.current_center_y = self.target_center_y
         else:
-            diff = self.target_center_x - self.current_center_x
-            
-            # SIMPLIFIED LOGIC:
-            # 1. Is the target outside the safe zone?
-            if abs(diff) > self.safe_zone_radius:
-                # 2. If yes, move towards it slowly (Linear Speed)
-                # Determine direction
-                direction = 1 if diff > 0 else -1
-                
-                # Speed: 2 pixels per frame (Slow pan)
-                # If the distance is HUGE (scene change or fast movement), speed up slightly
-                if abs(diff) > self.crop_width * 0.5:
-                    speed = 15.0 # Fast re-frame
-                else:
-                    speed = 3.0  # Slow, steady pan
-                
-                self.current_center_x += direction * speed
-                
-                # Check if we overshot (prevent oscillation)
-                new_diff = self.target_center_x - self.current_center_x
-                if (direction == 1 and new_diff < 0) or (direction == -1 and new_diff > 0):
-                    self.current_center_x = self.target_center_x
-            
-            # If inside safe zone, DO NOTHING (Stationary Camera)
+            diff_x = self.target_center_x - self.current_center_x
+            diff_y = self.target_center_y - self.current_center_y
 
-            # Smooth vertical adjustment for headroom if available
-            if hasattr(self, 'target_center_y'):
-                diff_y = self.target_center_y - self.current_center_y
-                if abs(diff_y) > 2.0:
-                    self.current_center_y += (1 if diff_y > 0 else -1) * 3.0
+            # 1. Dynamic Dead-Zone (Hysteresis): ±7% of screen dimension
+            # If subject micro-moves within deadband, keep camera stationary
+            if abs(diff_x) > self.deadzone_x:
+                # 2. Exponential Moving Average (EMA) Smoothing past dead-band
+                step_x = (diff_x - math.copysign(self.deadzone_x, diff_x)) * self.smoothing_factor_x
+                self.current_center_x += step_x
 
-        # Velocity clamping: cap per-frame displacement at 2.5% of frame
-        # Skip during force_snap (intentional instant cut, not dampened)
+            if abs(diff_y) > self.deadzone_y:
+                step_y = (diff_y - math.copysign(self.deadzone_y, diff_y)) * self.smoothing_factor_y
+                self.current_center_y += step_y
+
+        # 3. Velocity Clamping: prevent whipping during sudden fast motion
         if not force_snap:
             delta_x = self.current_center_x - prev_cx
-            if abs(delta_x) > max_step_x:
-                import math
-                self.current_center_x = prev_cx + math.copysign(max_step_x, delta_x)
+            if abs(delta_x) > self.max_step_x:
+                self.current_center_x = prev_cx + math.copysign(self.max_step_x, delta_x)
             delta_y = self.current_center_y - prev_cy
-            if abs(delta_y) > max_step_y:
-                import math
-                self.current_center_y = prev_cy + math.copysign(max_step_y, delta_y)
+            if abs(delta_y) > self.max_step_y:
+                self.current_center_y = prev_cy + math.copysign(self.max_step_y, delta_y)
 
-        # Soft boundary deceleration: smoothly decelerate near edges
-        # Skip during force_snap (instant cut to target)
-        half_crop = self.crop_width / 2
+        # 4. Safe-Zone Aware Auto-Reframing (Platform UI Collision Guard)
+        # Safe Envelope: X in 12% - 78%, Y in 15% - 70%
+        crop_x0 = self.current_center_x - self.crop_width / 2.0
+        crop_y0 = self.current_center_y - self.crop_height / 2.0
+        
+        norm_subj_x = (self.target_center_x - crop_x0) / max(1.0, float(self.crop_width))
+        norm_subj_y = (self.target_center_y - crop_y0) / max(1.0, float(self.crop_height))
+
+        # Right-Rail Avoidance: ensure subject face never sits under right action buttons (X > 78%)
+        if norm_subj_x > 0.78:
+            overlap_r = (norm_subj_x - 0.78) * self.crop_width
+            self.current_center_x += overlap_r
+        elif norm_subj_x < 0.12:
+            overlap_l = (0.12 - norm_subj_x) * self.crop_width
+            self.current_center_x -= overlap_l
+
+        # Headroom Protection: maintain comfortable headroom (Y: 18%-25%), avoid top header
+        if norm_subj_y < 0.18:
+            overlap_t = (0.18 - norm_subj_y) * self.crop_height
+            self.current_center_y -= overlap_t
+        elif norm_subj_y > 0.70:
+            overlap_b = (norm_subj_y - 0.70) * self.crop_height
+            self.current_center_y += overlap_b
+
+        # 5. Soft boundary deceleration near canvas boundaries
+        half_crop = self.crop_width / 2.0
         if not force_snap:
             min_cx = half_crop
             max_cx = self.video_width - half_crop
@@ -297,31 +276,42 @@ class SmoothedCameraman:
                 t = max(0.0, (max_cx - self.current_center_x) / soft_margin_x)
                 self.current_center_x = prev_cx + dx * (0.5 + 0.5 * t)
 
-        # Clamp center (final safety)
-        if self.current_center_x - half_crop < 0:
-            self.current_center_x = half_crop
-        if self.current_center_x + half_crop > self.video_width:
-            self.current_center_x = self.video_width - half_crop
-            
-        x1 = int(self.current_center_x - half_crop)
-        x2 = int(self.current_center_x + half_crop)
-        
-        x1 = max(0, x1)
-        x2 = min(self.video_width, x2)
-        
-        if self.crop_height < self.video_height:
-            cy = getattr(self, 'current_center_y', self.video_height / 2.0)
-            half_h = self.crop_height / 2.0
-            clamped_cy = max(half_h, min(self.video_height - half_h, cy))
-            y1 = int(round(clamped_cy - half_h))
-            y2 = int(round(clamped_cy + half_h))
-            y1 = max(0, min(self.video_height - self.crop_height, y1))
-            y2 = y1 + self.crop_height
-        else:
-            y1 = 0
-            y2 = self.video_height
-        
+        # 6. Dynamic Scale Punch-In for Vertical Headroom Headroom Freedom
+        scale = 1.0
+        if self.crop_height >= self.video_height * 0.95:
+            # If subject eye is low or high, scale gently up to 1.25x to provide vertical translation headroom
+            subj_y = getattr(self, 'target_center_y', self.video_height / 2.0)
+            ideal_norm_y = self.target_headroom
+            ideal_ch = subj_y / max(0.01, ideal_norm_y)
+            if ideal_ch > self.crop_height:
+                scale = min(1.25, max(1.0, ideal_ch / self.crop_height))
+            elif subj_y < self.crop_height * 0.20:
+                scale = min(1.25, max(1.0, (self.crop_height * 0.20) / max(1.0, subj_y)))
+
+        eff_w = self.crop_width / scale
+        eff_h = self.crop_height / scale
+
+        half_crop = eff_w / 2.0
+        half_h = eff_h / 2.0
+        self.current_center_x = max(half_crop, min(self.video_width - half_crop, self.current_center_x))
+        self.current_center_y = max(half_h, min(self.video_height - half_h, self.current_center_y))
+
+        x1 = int(round(self.current_center_x - half_crop))
+        y1 = int(round(self.current_center_y - half_h))
+        eff_w_int = int(round(eff_w))
+        eff_h_int = int(round(eff_h))
+        x1 = max(0, min(self.video_width - eff_w_int, x1))
+        y1 = max(0, min(self.video_height - eff_h_int, y1))
+        x1 -= x1 % 2
+        y1 -= y1 % 2
+        eff_w_int -= eff_w_int % 2
+        eff_h_int -= eff_h_int % 2
+        x2 = x1 + eff_w_int
+        y2 = y1 + eff_h_int
+
         return x1, y1, x2, y2
+
+Cameraman = SmoothedCameraman
 
 class SpeakerTracker:
     """

@@ -657,7 +657,8 @@ class ThreeZoneFramingEngine:
                 self.last_cut_focal_anchor = self.current_focal_anchor
             else:
                 self.snap_to(self.orig_w / 2.0, self.orig_h / 2.0)
-            self.last_anchor_switch_frame = frame_idx
+            # Reset dwell timer so smooth dynamic tracking resumes immediately on subsequent frames
+            self.last_anchor_switch_frame = -10000
             self.last_zone_switch_frame = frame_idx
             self.pending_anchor_x = None
             self.pending_anchor_count = 0
@@ -772,107 +773,64 @@ class ThreeZoneFramingEngine:
                 desired_center = self.anchor_center_x
                 desired_zone = self.committed_zone
 
-        # 3. Anchor & Dwell Decision with Strict Tripod Lock
-        dist_from_anchor = abs(desired_center - self.anchor_center_x)
+        # 3. Dynamic Camera Tracking & Safe-Zone Aware Following
+        deadzone_px = self.crop_w * 0.07  # Dynamic deadband: ±7% of 9:16 crop width
+        deadzone_py = self.crop_h * 0.07  # Dynamic vertical deadband: ±7%
 
-        if dist_from_anchor <= deadzone_px or in_dwell_period:
-            # Within deadzone OR still within mandatory dwell time:
-            # Camera MUST REMAIN STRICTLY LOCKED (Zero pan / Tripod Lock)
-            self.pending_anchor_x = None
-            self.pending_anchor_count = 0
-            self.target_center_x = self.anchor_center_x
-            if not self.is_panning:
-                self.current_center_x = self.anchor_center_x
-        else:
-            # Outside deadzone AND past dwell time:
-            if (self.pending_anchor_x is not None
-                    and abs(desired_center - self.pending_anchor_x) <= deadzone_px):
-                self.pending_anchor_count += 1
-            else:
-                self.pending_anchor_x = desired_center
-                self.pending_anchor_count = 1
+        # Check if this is a discrete multi-speaker switch to a different zone
+        is_multi_speaker_switch = (
+            len(face_candidates or []) > 1 and
+            active_speaker_idx is not None and
+            desired_zone != self.committed_zone and
+            not is_action_override
+        )
 
-            confirm_threshold = getattr(self.config, 'jump_confirm_frames', 1)
-            if self.pending_anchor_count >= confirm_threshold:
-                # Confirmed move! Check voice corroboration for side zones if not an action override
-                is_corroborated = True
-                candidate_zone = get_zone_for_x(self.pending_anchor_x, self.orig_w, self.config)
-                if not is_action_override and candidate_zone in (Zone.LEFT, Zone.RIGHT) and self.config.speech_energy_min_duration > 0.0:
-                    dur_s = self.side_speech_frames[candidate_zone] / self.fps
-                    if dur_s < self.config.speech_energy_min_duration:
-                        is_corroborated = False
-
-                if is_corroborated:
-                    self.committed_zone = candidate_zone
-                    self.last_anchor_switch_frame = frame_idx
-                    self.last_zone_switch_frame = frame_idx
-                    self.anchor_center_x = self._clamp_center(self.pending_anchor_x)
-                    self.target_center_x = self.anchor_center_x
-                    self.pending_anchor_x = None
-                    self.pending_anchor_count = 0
-
-                    if self.config.switch_mode == "cut":
-                        # Discrete studio camera hard cut (1-frame snap)
-                        self.current_center_x = self.target_center_x
-                        self.is_panning = False
-                    elif self.config.switch_mode == "pan":
-                        # 12-18 frame intentional cubic pan
-                        self.pan_start_frame = frame_idx
-                        self.pan_start_x = self.current_center_x
-                        self.pan_target_x = self.target_center_x
-                        self.is_panning = True
-
-                    # Check for rapid conversational turn-taking
-                    is_rapid = self.turn_monitor.record_speaker_switch(
-                        frame_idx, self.committed_zone, self.fps
-                    )
-                    if is_rapid:
-                        self.rapid_dialogue_active = True
-                else:
-                    self.target_center_x = self.anchor_center_x
-                    if not self.is_panning:
-                        self.current_center_x = self.anchor_center_x
-            else:
-                # Still confirming move, hold anchor
-                self.target_center_x = self.anchor_center_x
-                if not self.is_panning:
-                    self.current_center_x = self.anchor_center_x
-
-        # 4. Motion Execution & Stabilization
         prev_cx = self.current_center_x
         max_step = self.orig_w * self.config.max_pan_velocity_ratio
 
-        if self.is_panning:
-            pan_frames = max(1, self.config.pan_frames)
-            elapsed = frame_idx - self.pan_start_frame + 1
-            if elapsed >= pan_frames:
-                self.is_panning = False
-                self.current_center_x = self.pan_target_x
-            else:
-                t = min(1.0, max(0.0, elapsed / float(pan_frames)))
-                cubic_t = t * t * (3.0 - 2.0 * t)
-                self.current_center_x = self.pan_start_x + (self.pan_target_x - self.pan_start_x) * cubic_t
-        elif self.config.switch_mode == "cut":
-            # In cut mode, once anchored, camera is 100% frozen stationary at anchor
-            self.current_center_x = self.anchor_center_x
+        if is_multi_speaker_switch and in_dwell_period:
+            # Hold previous camera anchor during multi-speaker turn dwell
+            self.target_center_x = self.anchor_center_x
         else:
-            dist = abs(self.target_center_x - self.current_center_x)
-            if dist < 1.0:
-                self.current_center_x = self.target_center_x
-            elif dist > (self.orig_w * self.config.snap_distance_ratio):
-                self.current_center_x = self.target_center_x
+            diff_x = desired_center - self.current_center_x
+            if abs(diff_x) <= deadzone_px:
+                # Subject micro-movements within ±7% deadband: keep camera stationary (solid tripod)
+                self.target_center_x = self.current_center_x
             else:
-                self.current_center_x = (
-                    self.ema_alpha * self.target_center_x +
-                    (1.0 - self.ema_alpha) * self.current_center_x
-                )
+                # Subject moving across deadband: smoothly track with Exponential Moving Average (EMA)
+                self.target_center_x = desired_center
+                self.anchor_center_x = desired_center
+                self.committed_zone = desired_zone
+                alpha = max(0.08, min(0.12, getattr(self, 'ema_alpha', 0.10)))
+                step_x = (diff_x - math.copysign(deadzone_px, diff_x)) * alpha
+                self.current_center_x += step_x
 
-        # Clamp per-frame X velocity to max_pan_velocity_ratio (prevent whipping)
+        # Velocity Clamping for X (prevent whipping)
         delta_x = self.current_center_x - prev_cx
         if abs(delta_x) > max_step:
             self.current_center_x = prev_cx + math.copysign(max_step, delta_x)
 
-        # Apply soft boundary deceleration (smooth edge approach, no jarring stop)
+        # Safe-Zone Aware Auto-Reframing (Platform UI Collision Guard)
+        # Safe Envelope: X in 12% - 78%, Y in 15% - 70%
+        crop_x0 = self.current_center_x - self.crop_w / 2.0
+        crop_y0 = self.current_center_y - self.crop_h / 2.0
+
+        norm_subj_x = (desired_center - crop_x0) / max(1.0, float(self.crop_w))
+        norm_subj_y = (self.target_center_y - crop_y0) / max(1.0, float(self.crop_h))
+
+        # Right-Rail Avoidance: ensure subject face never sits under right action buttons (X > 78%)
+        if norm_subj_x > 0.78:
+            self.current_center_x += (norm_subj_x - 0.78) * self.crop_w
+        elif norm_subj_x < 0.12:
+            self.current_center_x -= (0.12 - norm_subj_x) * self.crop_w
+
+        # Headroom Protection: maintain comfortable headroom (Y: 18%-25%), avoid top header
+        if norm_subj_y < 0.18:
+            self.current_center_y -= (0.18 - norm_subj_y) * self.crop_h
+        elif norm_subj_y > 0.70:
+            self.current_center_y += (norm_subj_y - 0.70) * self.crop_h
+
+        # Apply soft boundary deceleration (smooth edge approach)
         self.current_center_x = self._apply_soft_boundary(self.current_center_x, prev_cx)
 
         # Y-axis: EMA + velocity clamp + soft boundary
