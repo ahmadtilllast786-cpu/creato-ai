@@ -30,7 +30,7 @@ class VideoEditor:
         self.model_name = (
             os.environ.get("GEMINI_MODEL_EDITOR")
             or os.environ.get("GEMINI_MODEL")
-            or "gemini-3.1-flash-lite"
+            or "gemini-2.5-flash"
         )
 
     def upload_video(self, video_path):

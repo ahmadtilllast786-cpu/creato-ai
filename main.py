@@ -1768,12 +1768,19 @@ def _run_gemini_stage(client, model_name, prompt, schema, creative=False):
         response_schema=schema,
         temperature=0.7 if creative else 0.1,
     )
+    active_model = model_name
+    candidate_fallbacks = [model_name, 'gemini-2.5-flash', 'gemini-2.0-flash']
+    seen = set()
+    candidate_fallbacks = [m for m in candidate_fallbacks if m and not (m in seen or seen.add(m))]
+
     max_attempts = 3
     for attempt in range(1, max_attempts + 1):
         try:
             if use_local:
                 return llm_backend.generate_json(prompt, schema, model=model_name)
-            response = client.models.generate_content(model=model_name, contents=prompt, config=config)
+            if attempt > 1 and len(candidate_fallbacks) >= attempt:
+                active_model = candidate_fallbacks[attempt - 1]
+            response = client.models.generate_content(model=active_model, contents=prompt, config=config)
             # Policy blocks are deterministic — retrying only burns quota and
             # time, and the user deserves the real reason instead of a generic
             # "empty response" (prod 23-jul: PROHIBITED_CONTENT on every try).
@@ -1788,7 +1795,7 @@ def _run_gemini_stage(client, model_name, prompt, schema, creative=False):
             else:
                 parsed = gemini_worker._parse_json_response_text(
                     gemini_worker._get_response_text(response))
-            return parsed, gemini_worker._calculate_cost_analysis(response, model_name)
+            return parsed, gemini_worker._calculate_cost_analysis(response, active_model)
         except gemini_worker.GeminiBlockedError:
             raise  # deterministic policy block — never retry
         except Exception as e:
@@ -1804,7 +1811,7 @@ def _run_gemini_stage(client, model_name, prompt, schema, creative=False):
                 'validation error'))
             if attempt == max_attempts or not transient:
                 raise
-            wait = 5 * (2 ** (attempt - 1))
+            wait = 2 * (2 ** (attempt - 1))
             who = "LLM server" if use_local else "Gemini"
             print(f"⚠️ {who} transient error (attempt {attempt}/{max_attempts}), retrying in {wait}s: {msg[:150]}")
             time.sleep(wait)
@@ -1864,7 +1871,7 @@ def get_viral_clips(transcript_result, video_duration, creative=False):
             min_secs, max_secs = clip_duration_bounds()
             return get_heuristic_clips(transcript_result, video_duration, min_secs=min_secs, max_secs=max_secs)
         client = genai.Client(api_key=api_key)
-        model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
+        model_name = os.environ.get("GEMINI_MODEL") or 'gemini-2.5-flash'
     print(f"\U0001f916  Model: {model_name} | language: {language}")
 
     # Full word list — ground truth for snapping cut points.
@@ -2033,7 +2040,7 @@ def get_visual_clips(video_path, video_duration, language="en"):
             print("❌ Error: GEMINI_API_KEY not found.")
         return None
     client = genai.Client(api_key=api_key)
-    model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
+    model_name = os.environ.get("GEMINI_MODEL") or 'gemini-2.5-flash'
     
     upload_file_path = _create_visual_proxy(video_path)
     is_temp_proxy = (upload_file_path != video_path)

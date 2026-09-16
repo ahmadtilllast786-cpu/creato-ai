@@ -44,6 +44,7 @@ explicit choice is never overridden.
 """
 import json
 import os
+import time
 from ffmpeg_utils import open_video_capture
 
 # AUTO_LAYOUT=1 decides and applies. AUTO_LAYOUT=shadow decides, logs, and
@@ -142,7 +143,7 @@ def pick(video_path, video_duration):
     if not api_key:
         return "none"
 
-    model_name = os.environ.get("GEMINI_MODEL") or 'gemini-3.1-flash-lite'
+    primary_model = os.environ.get("GEMINI_MODEL") or 'gemini-2.5-flash'
     print("🎛️  Choosing a layout for this video…")
     try:
         # Inside the try on purpose: the contract above is that this never
@@ -153,23 +154,50 @@ def pick(video_path, video_duration):
 
         frames = sample_frames(video_path)
         if not frames:
-            print("   ⚠️ No readable frames — keeping the default layout.")
+            print("   ℹ️ No readable frames — keeping the default layout.")
             return "none"
 
         client = genai.Client(api_key=api_key)
         parts = [genai_types.Part.from_bytes(data=b, mime_type="image/jpeg")
                  for b in frames]
-        response = client.models.generate_content(
-            model=model_name,
-            contents=parts + [gemini_worker.LAYOUT_CHOICE_PROMPT],
-            config=genai_types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=gemini_worker.LayoutChoice,
-            ))
-        gemini_worker.raise_if_blocked(response)
-        answer = json.loads(response.text) or {}
+
+        # Multi-model fallback: if a model is unavailable / high demand (503/429),
+        # smoothly fall back to high-capacity production models (gemini-2.5-flash, gemini-2.0-flash).
+        candidate_models = [primary_model, 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
+        seen = set()
+        models = [m for m in candidate_models if m and not (m in seen or seen.add(m))]
+
+        answer = None
+        for m in models:
+            for attempt in range(2):
+                try:
+                    response = client.models.generate_content(
+                        model=m,
+                        contents=parts + [gemini_worker.LAYOUT_CHOICE_PROMPT],
+                        config=genai_types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            response_schema=gemini_worker.LayoutChoice,
+                        ))
+                    gemini_worker.raise_if_blocked(response)
+                    answer = json.loads(response.text) or {}
+                    break
+                except Exception as err:
+                    err_str = str(err)
+                    is_transient = any(tok in err_str for tok in (
+                        '503', 'UNAVAILABLE', '429', 'RESOURCE_EXHAUSTED',
+                        'high demand', 'overloaded', '500', 'INTERNAL'))
+                    if is_transient and attempt == 0:
+                        time.sleep(1.2)
+                        continue
+                    break
+            if answer:
+                break
+
+        if not answer:
+            print("   ℹ️ Layout choice defaulting to standard crop.")
+            return "none"
     except Exception as e:
-        print(f"   ⚠️ Layout choice failed ({e}) — keeping the default layout.")
+        print(f"   ℹ️ Layout choice defaulting to standard crop ({e}).")
         return "none"
 
     decision = str(answer.get("layout", "none")).strip().lower()
