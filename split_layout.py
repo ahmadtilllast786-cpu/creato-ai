@@ -191,9 +191,9 @@ def split_filtergraph(orig_w, orig_h, out_w, out_h, left_centre, right_centre):
     return (
         f"[0:v]split=2[ta][ba];"
         f"[ta]crop=w={top_w}:h={top_h}:x={top_x}:y={top_y},"
-        f"scale={out_w}:{half_h}[top];"
+        f"scale={out_w}:{half_h}:flags=lanczos+accurate_rnd,unsharp=5:5:0.6:5:5:0.0[top];"
         f"[ba]crop=w={bot_w}:h={bot_h}:x={bot_x}:y={bot_y},"
-        f"scale={out_w}:{half_h}[bot];"
+        f"scale={out_w}:{half_h}:flags=lanczos+accurate_rnd,unsharp=5:5:0.6:5:5:0.0[bot];"
         f"[top][bot]vstack=inputs=2,"
         # vstack of two half_h halves can be 2px short of out_h after the
         # even-rounding above; pad rather than scale so neither half is

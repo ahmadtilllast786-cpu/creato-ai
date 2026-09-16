@@ -440,6 +440,12 @@ class ThreeZoneFramingEngine:
         self.current_scale: float = 1.0
         self.target_scale: float = 1.0
 
+        # Subject persistence / memory (holds camera anchor when detections flicker or subject turns)
+        self.subject_memory_frames: int = 0
+        self.max_subject_memory: int = int(round(1.5 * self.fps))
+        self.last_known_subject_cx: Optional[float] = None
+        self.last_known_subject_cy: Optional[float] = None
+
     def compute_focal_anchor_canvas(self, face_candidate: Dict[str, Any]) -> Tuple[float, float]:
         """Calculates normalized canvas coordinates [0, 1] of the subject's focal point (eye-line)."""
         box = face_candidate.get('box', [0, 0, 0, 0])
@@ -558,6 +564,9 @@ class ThreeZoneFramingEngine:
         self.action_detector.reset()
         self.turn_monitor.reset()
         self.rapid_dialogue_active = False
+        self.subject_memory_frames = 0
+        self.last_known_subject_cx = None
+        self.last_known_subject_cy = None
 
     def snap_to(self, center_x: float, center_y: Optional[float] = None):
         """Instant cut/snap to target center without panning."""
@@ -644,7 +653,8 @@ class ThreeZoneFramingEngine:
                      active_speaker_idx: Optional[int] = None,
                      frame_image: Optional[np.ndarray] = None,
                      force_snap: bool = False,
-                     speech_durations: Optional[Dict[Zone, float]] = None) -> Tuple[int, int, int, int]:
+                     speech_durations: Optional[Dict[Zone, float]] = None,
+                     text_regions: Optional[List[Dict[str, Any]]] = None) -> Tuple[int, int, int, int]:
         """Process one frame and return crop box: (x1, y1, crop_w, crop_h)."""
         if force_snap:
             if face_candidates:
@@ -733,45 +743,57 @@ class ThreeZoneFramingEngine:
             ideal_center_y = top_face_y + self.crop_h * (0.5 - target_headroom)
             self.target_center_y = self._clamp_center_y(ideal_center_y)
 
-            # Multi-person group hysteresis:
-            # Require multi-person balance to persist across consecutive frames before shifting
-            # to group midpoint, preventing oscillation when a second face flickers.
-            is_balanced_group = False
+            # Multi-person group & side character framing:
+            # When multiple characters are present, check their bounding span.
+            # If characters fit within the 9:16 crop window (span <= 90% of crop_w),
+            # smoothly center on their midpoint so neither character is cut off or lost.
             if len(face_candidates) > 1 and active_speaker_idx is None:
-                sorted_cands = sorted(
-                    face_candidates,
-                    key=lambda c: c.get('score', c['box'][2] * c['box'][3]),
-                    reverse=True
-                )
-                s0 = sorted_cands[0].get('score', sorted_cands[0]['box'][2] * sorted_cands[0]['box'][3])
-                s1 = sorted_cands[1].get('score', sorted_cands[1]['box'][2] * sorted_cands[1]['box'][3])
-                if s1 > self.config.group_balance_ratio * s0:
-                    is_balanced_group = True
-
-            if is_balanced_group:
-                self.group_active_frames += 1
-            else:
-                self.group_active_frames = max(0, self.group_active_frames - 1)
-
-            if self.group_active_frames >= 4:
                 all_min_x = min(c['box'][0] for c in face_candidates)
                 all_max_x = max(c['box'][0] + c['box'][2] for c in face_candidates)
                 group_span = all_max_x - all_min_x
-                group_mid = (all_min_x + all_max_x) / 2.0
-                if group_span > self.crop_w * 0.90:
+                if group_span <= self.crop_w * 0.90:
+                    face_cx = (all_min_x + all_max_x) / 2.0
+                else:
                     self.rapid_dialogue_active = True
-                face_cx = group_mid
+
+            # Contextual text tracking: preserve on-screen titles / graphics / captions
+            if text_regions:
+                for txt in text_regions:
+                    t_box = txt.get('box', (0, 0, 0, 0))
+                    t_w = t_box[2]
+                    # Only consider meaningful text regions (>= 10% of frame width)
+                    if t_w >= self.orig_w * 0.10:
+                        comb_min_x = min(face_cx - box[2] / 2.0, t_box[0])
+                        comb_max_x = max(face_cx + box[2] / 2.0, t_box[0] + t_w)
+                        if (comb_max_x - comb_min_x) <= self.crop_w * 0.92:
+                            # Both character and contextual text fit comfortably in frame:
+                            face_cx = (comb_min_x + comb_max_x) / 2.0
+                            break
 
             desired_center = face_cx
             desired_zone = get_zone_for_x(face_cx, self.orig_w, self.config)
+
+            # Update subject persistence memory so camera holds anchor if subject temporarily turns or flickers
+            self.last_known_subject_cx = desired_center
+            self.last_known_subject_cy = self.target_center_y
+            self.subject_memory_frames = 0
         else:
-            # No face detected and no active action: return to Center if not already there
-            if self.committed_zone != Zone.CENTER:
-                desired_zone = Zone.CENTER
-                desired_center = get_zone_nominal_center(Zone.CENTER, self.orig_w, self.config)
-            else:
-                desired_center = self.anchor_center_x
+            # No face detected and no active action:
+            # Use subject persistence memory (up to 1.5s / 45 frames) to hold camera anchor
+            if self.subject_memory_frames < self.max_subject_memory and self.last_known_subject_cx is not None:
+                self.subject_memory_frames += 1
+                desired_center = self.last_known_subject_cx
                 desired_zone = self.committed_zone
+                if self.last_known_subject_cy is not None:
+                    self.target_center_y = self.last_known_subject_cy
+            else:
+                # Subject memory expired: smoothly return to Center if not already there
+                if self.committed_zone != Zone.CENTER:
+                    desired_zone = Zone.CENTER
+                    desired_center = get_zone_nominal_center(Zone.CENTER, self.orig_w, self.config)
+                else:
+                    desired_center = self.anchor_center_x
+                    desired_zone = self.committed_zone
 
         # 3. Dynamic Camera Tracking & Safe-Zone Aware Following
         deadzone_px = self.crop_w * 0.07  # Dynamic deadband: ±7% of 9:16 crop width

@@ -533,39 +533,125 @@ def detect_face_candidates(frame):
             
     return candidates
 
+def detect_people_yolo(frame, conf_threshold=0.25):
+    """
+    Detect ALL people in the scene using YOLO (class 0: person).
+    Returns a list of candidate dicts:
+    [
+        {
+            'box': [x1, y1, w, head_h],     # Head / upper torso for camera tracking
+            'full_box': [x1, y1, w, h],     # Entire body bounding box
+            'score': float(area * conf),
+            'conf': float(conf),
+            'eye_line': [float(x1 + w / 2.0), float(y1 + head_h * 0.45)],
+            'focal_anchor': [float(x1 + w / 2.0), float(y1 + head_h * 0.45)],
+            'type': 'person'
+        }, ...
+    ]
+    Sorted descending by score (largest / most prominent character first).
+    """
+    small, scale = _detection_frame(frame)
+    with DETECT_LOCK:
+        results = model(small, verbose=False, classes=[0], conf=conf_threshold)
+
+    if not results:
+        return []
+
+    people = []
+    for result in results:
+        boxes = result.boxes
+        if boxes is None:
+            continue
+        for box in boxes:
+            conf = float(box.conf[0]) if hasattr(box, 'conf') and len(box.conf) > 0 else 0.5
+            if conf < conf_threshold:
+                continue
+            x1, y1, x2, y2 = [int(i * scale) for i in box.xyxy[0]]
+            w = max(2, x2 - x1)
+            h = max(2, y2 - y1)
+            area = w * h
+            head_h = max(2, int(h * 0.40))  # Head + upper chest for framing
+            
+            eye_cx = float(x1 + w / 2.0)
+            eye_cy = float(y1 + head_h * 0.45)
+            
+            people.append({
+                'box': [x1, y1, w, head_h],
+                'full_box': [x1, y1, w, h],
+                'score': float(area * (0.5 + 0.5 * conf)),
+                'conf': conf,
+                'eye_line': [round(eye_cx, 2), round(eye_cy, 2)],
+                'focal_anchor': [round(eye_cx, 2), round(eye_cy, 2)],
+                'type': 'person'
+            })
+
+    people.sort(key=lambda p: p['score'], reverse=True)
+    return people
+
+
 def detect_person_yolo(frame):
     """
     Fallback: Detect largest person using YOLO when face detection fails.
     Returns [x, y, w, h] of the person's 'upper body' approximation, in
-    ORIGINAL frame coordinates (inference runs on a downscaled copy).
+    ORIGINAL frame coordinates.
     """
-    small, scale = _detection_frame(frame)
-    # Use the globally loaded model
-    with DETECT_LOCK:
-        results = model(small, verbose=False, classes=[0]) # class 0 is person
+    people = detect_people_yolo(frame)
+    return people[0]['box'] if people else None
 
-    if not results:
-        return None
 
-    best_box = None
-    max_area = 0
-
-    for result in results:
-        boxes = result.boxes
-        for box in boxes:
-            x1, y1, x2, y2 = [int(i * scale) for i in box.xyxy[0]]
-            w = x2 - x1
-            h = y2 - y1
-            area = w * h
-            
-            if area > max_area:
-                max_area = area
-                # Focus on the top 40% of the person (head/chest) for framing
-                # This approximates where the face is if we can't detect it directly
-                face_h = int(h * 0.4)
-                best_box = [x1, y1, w, face_h]
+def detect_contextual_text_regions(frame):
+    """
+    Ultra-fast OpenCV morphological text detector for on-screen context:
+    Detects lower-thirds, presentation slides, titles, banners, product labels,
+    and scoreboard text that carry key contextual meaning in the video.
+    Returns: list of {'box': [x, y, w, h], 'score': area, 'aspect': aspect, 'type': 'text'}
+    """
+    h, w = frame.shape[:2]
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    # 1. Gradient to detect stroke edges characteristic of text and banners
+    grad_x = cv2.convertScaleAbs(cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3))
+    grad_y = cv2.convertScaleAbs(cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3))
+    grad = cv2.addWeighted(grad_x, 0.7, grad_y, 0.3, 0)
+    
+    # 2. Morphological closing with wide horizontal kernel to connect character clusters into text lines
+    kernel_h = cv2.getStructuringElement(cv2.MORPH_RECT, (max(5, int(w * 0.025)), 3))
+    morph = cv2.morphologyEx(grad, cv2.MORPH_CLOSE, kernel_h)
+    
+    # 3. Otsu thresholding
+    _, thresh = cv2.threshold(morph, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    # 4. Line grouping
+    kernel_line = cv2.getStructuringElement(cv2.MORPH_RECT, (max(7, int(w * 0.040)), 5))
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel_line)
+    
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    text_regions = []
+    min_w = int(w * 0.04)   # At least 4% of screen width
+    min_h = int(h * 0.015)  # At least 1.5% of screen height
+    max_h = int(h * 0.35)   # Reject full-screen blobs
+    
+    for cnt in contours:
+        x, y, cw, ch = cv2.boundingRect(cnt)
+        aspect = cw / float(max(1, ch))
+        # Text characteristics: horizontal banner (aspect >= 1.2), within size bounds
+        if cw >= min_w and ch >= min_h and ch <= max_h and aspect >= 1.2:
+            roi_grad = grad[y:y+ch, x:x+cw]
+            if np.mean(roi_grad) > 10.0:
+                text_regions.append({
+                    'box': [x, y, cw, ch],
+                    'width': cw,
+                    'height': ch,
+                    'cx': x + cw / 2.0,
+                    'cy': y + ch / 2.0,
+                    'score': cw * ch,
+                    'aspect': round(aspect, 2),
+                    'type': 'text'
+                })
                 
-    return best_box
+    text_regions.sort(key=lambda t: t['score'], reverse=True)
+    return text_regions
 
 def create_general_frame(frame, output_width, output_height):
     """
@@ -651,6 +737,7 @@ def analyze_scenes_strategy(video_path, scenes):
                 ))
 
                 face_counts = []
+                wide_text_count = 0
                 for f_idx in frames_to_check:
                     cap.set(cv2.CAP_PROP_POS_FRAMES, f_idx)
                     ret, frame = cap.read()
@@ -661,22 +748,28 @@ def analyze_scenes_strategy(video_path, scenes):
                     if frame.mean() < 16:
                         continue
 
-                    # Detect faces
+                    # Detect faces and people (profile faces / side characters)
                     candidates = detect_face_candidates(frame)
+                    if not candidates:
+                        people = detect_people_yolo(frame)
+                        candidates = people
                     face_counts.append(len(candidates))
 
+                    # Contextual text detection: detect wide banners, titles, slides, lower-thirds
+                    text_regs = detect_contextual_text_regions(frame)
+                    if text_regs and any(t['box'][2] > frame.shape[1] * 0.50 for t in text_regs):
+                        wide_text_count += 1
+
                 # Decision Logic
-                if not face_counts:
-                    avg_faces = 0
-                else:
-                    avg_faces = sum(face_counts) / len(face_counts)
+                avg_faces = sum(face_counts) / len(face_counts) if face_counts else 0
+                has_wide_text = wide_text_count >= 2
 
                 # Strategy:
+                # Wide contextual text -> GENERAL (preserves full text without side cropping)
                 # 0 faces -> GENERAL (Landscape/B-roll)
-                # 1 face -> TRACK
-                # > 1.2 faces -> GENERAL (Group)
-
-                if avg_faces > 1.2 or avg_faces < 0.5:
+                # 1-2 faces -> TRACK (smart one-shot or two-shot framing)
+                # > 2.2 faces -> GENERAL (Broad crowd / wide group)
+                if has_wide_text or avg_faces > 2.2 or avg_faces < 0.5:
                     strategies.append('GENERAL')
                 else:
                     strategies.append('TRACK')
@@ -1367,7 +1460,7 @@ def apply_watermark(video_path):
     return False
 
 
-def build_blurred_background_filter(out_w=1080, out_h=1920, dim=True, orig_w=None, orig_h=None):
+def build_blurred_background_filter(out_w=1080, out_h=1920, dim=True, orig_w=None, orig_h=None, sharp=False):
     """
     Builds the optimized FFmpeg filter complex for Blurred Background Fill (1080x1920):
     1. Foreground: scaled to fit cleanly within out_w (scale=1080:-2), maintaining aspect ratio with no stretching/cropping.
@@ -1377,10 +1470,11 @@ def build_blurred_background_filter(out_w=1080, out_h=1920, dim=True, orig_w=Non
     out_w = out_w + (out_w % 2)
     out_h = out_h + (out_h % 2)
     dim_str = ",eq=brightness=-0.05" if dim else ""
+    sharp_flags = ":flags=lanczos+accurate_rnd,unsharp=5:5:0.6:5:5:0.0" if sharp else ""
     if orig_w and orig_h and (orig_w / float(orig_h) < out_w / float(out_h)):
-        fg_scale = f"scale=-2:{out_h}"
+        fg_scale = f"scale=-2:{out_h}{sharp_flags}"
     else:
-        fg_scale = f"scale={out_w}:-2"
+        fg_scale = f"scale={out_w}:-2{sharp_flags}"
     return (
         f"[0:v]scale={out_w}:{out_h}:force_original_aspect_ratio=increase,"
         f"crop={out_w}:{out_h},boxblur=20:5{dim_str}[bg];"
@@ -1454,7 +1548,7 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
 
     dim = os.environ.get("BLUR_BG_DIM", "1").strip() != "0"
     filt = build_blurred_background_filter(out_w=out_w, out_h=out_h, dim=dim,
-                                          orig_w=orig_w, orig_h=orig_h)
+                                          orig_w=orig_w, orig_h=orig_h, sharp=True)
     filt_graph = f"{filt}[v]"
 
     out_dir = os.path.dirname(os.path.abspath(final_output_video))

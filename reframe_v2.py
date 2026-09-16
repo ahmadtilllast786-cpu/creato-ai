@@ -196,7 +196,7 @@ def general_filtergraph(out_w, out_h, content_h=None, orig_w=None, orig_h=None):
         # Scale by HEIGHT, then trim any overflow to the output width. crop
         # centres by default, and min() makes it a no-op when the scaled source
         # is already narrower than the frame (portrait/square sources).
-        f"[fga]scale=-2:{fg_h},crop=w=min(iw\\,{out_w}):h=ih[fg];"
+        f"[fga]scale=-2:{fg_h},unsharp=5:5:0.6:5:5:0.0,crop=w=min(iw\\,{out_w}):h=ih[fg];"
         f"[bg][fg]overlay=x=(W-w)/2:y=(H-h)/2,setsar=1[v]"
     )
 
@@ -365,6 +365,29 @@ def _analyze_trajectory(input_video, scenes_boundaries, scene_strategies,
                             cand['eye_line'] = [v * scale for v in cand['eye_line']]
                         if 'focal_anchor' in cand:
                             cand['focal_anchor'] = [v * scale for v in cand['focal_anchor']]
+
+                    # Fuse YOLO multi-person detections so turned heads, profile faces,
+                    # and side characters are never dropped
+                    yolo_people = m.detect_people_yolo(frame, conf_threshold=0.25)
+                    for p in yolo_people:
+                        p_head = [int(v * scale) for v in p['head_box']]
+                        # Check overlap with existing candidates
+                        overlap = False
+                        for c in candidates:
+                            cb = c['box']
+                            # Simple bounding box overlap check
+                            x_overlap = max(0, min(p_head[0] + p_head[2], cb[0] + cb[2]) - max(p_head[0], cb[0]))
+                            y_overlap = max(0, min(p_head[1] + p_head[3], cb[1] + cb[3]) - max(p_head[1], cb[1]))
+                            if x_overlap * y_overlap > 0.25 * (p_head[2] * p_head[3]):
+                                overlap = True
+                                break
+                        if not overlap:
+                            candidates.append({
+                                'box': p_head,
+                                'score': p_head[2] * p_head[3] * p.get('conf', 0.8),
+                                'person_box': [int(v * scale) for v in p['box']]
+                            })
+
                     target_box = tracker.get_target(candidates, frame_number, orig_w, orig_h)
                     active_idx = None
                     if target_box:
@@ -377,13 +400,15 @@ def _analyze_trajectory(input_video, scenes_boundaries, scene_strategies,
                             if active_idx is None:
                                 candidates.insert(0, {'box': target_box, 'score': 100000})
                                 active_idx = 0
-                    elif frame_number % m.YOLO_FALLBACK_STRIDE == 0 or cut:
-                        person_box = m.detect_person_yolo(frame)
-                        if person_box:
-                            scaled_box = [int(v * scale) for v in person_box]
-                            cameraman.update_target(scaled_box)
-                            candidates = [{'box': scaled_box, 'score': 1000}]
-                            active_idx = 0
+
+                    # Detect contextual text regions (titles, graphics, slides, labels)
+                    raw_text_regions = m.detect_contextual_text_regions(frame)
+                    scaled_text_regions = []
+                    for tr in raw_text_regions:
+                        tb = tr['box']
+                        scaled_text_regions.append({
+                            'box': (int(tb[0] * scale), int(tb[1] * scale), int(tb[2] * scale), int(tb[3] * scale))
+                        })
 
                 if use_three_zone and three_zone_engine:
                     x1, _y1, _cw, _ch = three_zone_engine.update_frame(
@@ -391,7 +416,8 @@ def _analyze_trajectory(input_video, scenes_boundaries, scene_strategies,
                         face_candidates=candidates if candidates else None,
                         active_speaker_idx=active_idx,
                         frame_image=frame,
-                        force_snap=is_scene_start
+                        force_snap=is_scene_start,
+                        text_regions=scaled_text_regions if 'scaled_text_regions' in locals() else None
                     )
                     cameraman.current_center_x = x1 + cameraman.crop_width / 2.0
                     cameraman.target_center_x = cameraman.current_center_x
