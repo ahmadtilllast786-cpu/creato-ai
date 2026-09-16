@@ -1207,20 +1207,49 @@ export default function MediaInput({ onProcess, isProcessing }) {
 
                 {/* Viral Hook Headline & Visual Style Options */}
                 <div className="mt-5 p-3.5 sm:p-4 rounded-card bg-paper2/50 border border-rule space-y-4">
-                    <div className="flex items-center justify-between">
-                        <label className="flex items-center gap-2 text-xs font-semibold text-ink uppercase tracking-wider cursor-pointer select-none">
-                            <input
-                                type="checkbox"
-                                checked={autoHook}
-                                onChange={(e) => setAutoHook(e.target.checked)}
-                                className="w-4 h-4 shrink-0 accent-[var(--color-accent)] cursor-pointer"
-                            />
-                            <Wand2 size={16} className="text-brass" />
-                            <span>Burn Hook Headlines on Clip</span>
-                        </label>
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                        <div 
+                            onClick={() => setAutoHook(!autoHook)}
+                            className="flex items-center gap-3 cursor-pointer select-none group"
+                        >
+                            {/* Modern Toggle Switch */}
+                            <button
+                                type="button"
+                                role="switch"
+                                aria-checked={autoHook}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setAutoHook(!autoHook);
+                                }}
+                                className={`relative inline-flex items-center h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-brass ${
+                                    autoHook ? 'bg-brass shadow-sm shadow-brass/30' : 'bg-paper3 border border-rule2/60'
+                                }`}
+                            >
+                                <span className="sr-only">Toggle Burn Hook Headlines</span>
+                                <span
+                                    aria-hidden="true"
+                                    className={`pointer-events-none inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                                        autoHook ? 'translate-x-4.5' : 'translate-x-0.5'
+                                    }`}
+                                />
+                            </button>
+
+                            <div className="flex items-center gap-2 text-xs font-semibold text-ink uppercase tracking-wider group-hover:text-brass transition-colors">
+                                <Wand2 size={16} className={autoHook ? "text-brass" : "text-muted"} />
+                                <span>Burn Hook Headlines on Clip</span>
+                            </div>
+                        </div>
+
                         <div className="flex items-center gap-2">
+                            <span className={`text-[10px] uppercase font-mono px-2 py-0.5 rounded border transition-colors ${
+                                autoHook 
+                                    ? 'text-brass bg-brass/10 border-brass/25' 
+                                    : 'text-muted bg-paper3 border-rule'
+                            }`}>
+                                {autoHook ? 'Enabled' : 'Disabled'}
+                            </span>
                             {autoHook && (
-                                <span className="text-[10px] text-brass uppercase font-mono px-2 py-0.5 rounded bg-brass/10 border border-brass/25">
+                                <span className="text-[10px] text-brass uppercase font-mono px-2 py-0.5 rounded bg-brass/10 border border-brass/25 animate-fade">
                                     {HOOK_STYLE_OPTIONS.find((h) => h.value === autoHookStyle)?.label || 'Viral Yellow'} • {autoHookDuration === 'forever' ? 'Whole Video' : `${autoHookDuration}s`}
                                 </span>
                             )}
