@@ -31,7 +31,8 @@ import split_layout
 from tracking import stabilize_crop_path
 from ffmpeg_utils import (video_encode_args, escape_filter_value, QUALITY_FAST,
                           BROADCAST, METADATA_SCRUB, run_ffmpeg_command, open_video_capture,
-                          ensure_file_unlocked, cleanup_temp_file, safe_replace)
+                          ensure_file_unlocked, cleanup_temp_file, safe_replace,
+                          verify_media_file, safe_unlink)
 
 ANALYSIS_MAX_WIDTH = 640
 
@@ -395,8 +396,9 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
     if not input_video:
         raise FileNotFoundError("Input video path is empty or None")
     ensure_file_unlocked(input_video, timeout=15)
-    if not os.path.exists(input_video) or os.path.getsize(input_video) == 0:
-        raise FileNotFoundError(f"Input video does not exist or is empty: {input_video}")
+    valid_in, err_in = verify_media_file(input_video, min_bytes=10240)
+    if not valid_in:
+        raise RuntimeError(f"Input video validation failed: {err_in}")
     import main as m
     content_ranges = content_ranges or []
 
@@ -689,14 +691,18 @@ def render(input_video, final_output_video, aspect_ratio, content_ranges=None,
             ])
 
         ensure_file_unlocked(staging_final, timeout=15)
-        if not (os.path.exists(staging_final) and os.path.getsize(staging_final) > 0):
-            raise RuntimeError(f"Rendered staging file is missing or 0 bytes: {staging_final}")
+        valid_staging, err_staging = verify_media_file(staging_final, min_bytes=10240)
+        if not valid_staging:
+            raise RuntimeError(f"Rendered staging file failed validation: {err_staging}")
 
         if not safe_replace(staging_final, final_output_video):
             import shutil
-            cleanup_temp_file(final_output_video)
+            safe_unlink(final_output_video)
             shutil.move(staging_final, final_output_video)
         ensure_file_unlocked(final_output_video, timeout=15)
+        valid_final, err_final = verify_media_file(final_output_video, min_bytes=10240)
+        if not valid_final:
+            raise RuntimeError(f"Final output video failed validation: {err_final}")
     finally:
         import shutil
         shutil.rmtree(workdir, ignore_errors=True)

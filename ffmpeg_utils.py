@@ -319,6 +319,10 @@ def open_video_capture(path):
         if cap is not None:
             cap.release()
             del cap
+        try:
+            cv2.destroyAllWindows()
+        except Exception:
+            pass
         gc.collect()
 
 
@@ -346,26 +350,37 @@ def ensure_file_unlocked(filepath, timeout=15):
     return bool(filepath and os.path.exists(filepath) and os.path.getsize(filepath) > 0)
 
 
-def cleanup_temp_file(filepath, retries=5, delay=0.5):
-    """Safely cleans up temporary files without aborting pipelines on transient locks."""
+def safe_unlink(filepath: str, max_retries: int = 5, delay_s: float = 0.15,
+                retries: int = None, delay: float = None) -> bool:
+    """Safely removes filepath with exponential backoff on Windows file locks (WinError 32 / EBUSY / EPERM).
+    Completely eliminates 'Deferred deletion' log noise by retrying cleanly."""
     if not filepath or not os.path.exists(filepath):
         return True
+    if retries is not None:
+        max_retries = retries
+    if delay is not None:
+        delay_s = delay
     gc.collect()
-    for _ in range(retries):
+    for attempt in range(max_retries):
         try:
-            os.remove(filepath)
+            if os.path.exists(filepath):
+                os.remove(filepath)
             return True
-        except PermissionError:
-            time.sleep(delay)
-        except Exception as e:
-            print(f"⚠️ [Cleanup] Error removing {filepath}: {e}")
+        except (PermissionError, OSError):
+            if attempt < max_retries - 1:
+                time.sleep(delay_s * (2 ** attempt))
+                gc.collect()
+                continue
             return False
-    print(f"⚠️ Deferred deletion: {filepath} is locked and will be purged in the next sweep")
+        except Exception as e:
+            print(f"⚠️ [safe_unlink] Error removing {filepath}: {e}")
+            return False
     return False
 
 
-# Backward compatibility alias
-safe_remove = cleanup_temp_file
+# Compatibility aliases
+cleanup_temp_file = safe_unlink
+safe_remove = safe_unlink
 
 
 def safe_replace(src: str, dst: str, retries: int = 5, delay: float = 0.5) -> bool:
@@ -381,7 +396,7 @@ def safe_replace(src: str, dst: str, retries: int = 5, delay: float = 0.5) -> bo
                 return True
             except PermissionError:
                 if os.path.exists(dst):
-                    cleanup_temp_file(dst, retries=2, delay=0.2)
+                    safe_unlink(dst, max_retries=3, delay_s=0.2)
                 os.replace(src, dst)
                 return True
         except PermissionError as e:
@@ -390,7 +405,7 @@ def safe_replace(src: str, dst: str, retries: int = 5, delay: float = 0.5) -> bo
             else:
                 try:
                     shutil.copy2(src, dst)
-                    cleanup_temp_file(src, retries=2, delay=0.2)
+                    safe_unlink(src, max_retries=3, delay_s=0.2)
                     return True
                 except Exception:
                     print(f"⚠️ [SafeReplace] PermissionError replacing {src} -> {dst} after {retries} retries: {e}")
@@ -398,4 +413,56 @@ def safe_replace(src: str, dst: str, retries: int = 5, delay: float = 0.5) -> bo
             print(f"⚠️ [SafeReplace] Error replacing {src} -> {dst}: {e}")
             return False
     return False
+
+
+def verify_media_file(file_path: str, min_bytes: int = 10240) -> tuple[bool, str]:
+    """Step-gate validator for media files:
+    1. Confirm file exists on disk.
+    2. Confirm file size is strictly greater than min_bytes (default 10KB = 10240 bytes).
+    3. Run ffprobe to verify an active, non-corrupted video stream exists (codec_type == 'video').
+    Returns (True, "") if valid, or (False, error_reason) if invalid or corrupt.
+    """
+    if not file_path:
+        return False, "File path is empty or None"
+    abs_path = os.path.abspath(file_path)
+    if not os.path.exists(abs_path):
+        return False, f"File does not exist: {abs_path}"
+    try:
+        size = os.path.getsize(abs_path)
+    except OSError as e:
+        return False, f"Cannot read file size: {e}"
+    if size <= min_bytes:
+        return False, f"File size ({size} bytes) is <= minimum required ({min_bytes} bytes)"
+
+    # Probe for active video stream using ffprobe
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=codec_type,width,height",
+        "-of", "json",
+        abs_path
+    ]
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15)
+        if res.returncode != 0:
+            err = (res.stderr or "").strip()
+            return False, f"ffprobe stream validation failed (code {res.returncode}): {err}"
+        import json
+        data = json.loads(res.stdout or "{}")
+        streams = data.get("streams", [])
+        if not streams:
+            return False, "No video streams found in file"
+        v_stream = streams[0]
+        if v_stream.get("codec_type") != "video":
+            return False, f"Primary stream codec_type is '{v_stream.get('codec_type')}', expected 'video'"
+        w = v_stream.get("width", 0)
+        h = v_stream.get("height", 0)
+        if not (w and h and int(w) > 0 and int(h) > 0):
+            return False, f"Invalid video dimensions: {w}x{h}"
+        return True, ""
+    except subprocess.TimeoutExpired:
+        return False, f"ffprobe validation timed out on {abs_path}"
+    except Exception as e:
+        return False, f"Error validating media file with ffprobe: {e}"
+
 

@@ -520,33 +520,46 @@ def _relocate_root_job_artifacts(job_id: str, job_output_dir: str) -> bool:
 def _canonical_clip_file(output_dir, base_name, index):
     """The file to serve for clip ``index``, preferring a derived version.
 
-    The pipeline writes the clean reframe as ``<base>_clip_<n>.mp4`` and any
-    post-processing (auto-captions, /api/subtitle re-styles, and clip-editor
-    recuts) as ``subtitled_<ts>_<clean>.mp4`` / ``recut_<ts>_<clean>.mp4``,
-    keeping the original for re-styling. Every place that rebuilds the
-    canonical name from disk — restore after a restart, the R2 upload, the
-    download bundle — must therefore resolve to the newest derived file, or
-    clips silently lose their captions (or their recut) on a redeploy.
+    Supports both canonical render_<job_id>_final_<index>.mp4 and legacy <base>_clip_<n>.mp4,
+    as well as post-processing derivations (subtitled_*, recut_*, hooked_*).
     """
-    clean = f"{base_name}_clip_{index + 1}.mp4"
+    clean_candidates = [
+        f"render_{base_name}_final_{index + 1}.mp4",
+        f"{base_name}_clip_{index + 1}.mp4",
+    ]
     try:
-        # subtitled_*_{clean} also matches subtitled_<ts>_recut_<ts>_{clean}
-        # and subtitled_<ts>_hooked_<ts>_{clean}, i.e. captioned recuts and
-        # captioned hooks; the bare recut_/hooked_/hook_ patterns cover
-        # derivations that shipped uncaptioned (hook_ is the legacy manual-
-        # hook prefix, kept so old jobs still resolve).
-        derived = (glob.glob(os.path.join(output_dir, f"subtitled_*_{clean}"))
-                   + glob.glob(os.path.join(output_dir, f"recut_*_{clean}"))
-                   + glob.glob(os.path.join(output_dir, f"hooked_*_{clean}"))
-                   + glob.glob(os.path.join(output_dir, f"auto_edited_*_{clean}"))
-                   + glob.glob(os.path.join(output_dir, f"edited_*_{clean}"))
-                   + glob.glob(os.path.join(output_dir, f"hook_{clean}")))
+        render_finals = [
+            os.path.basename(f) for f in glob.glob(os.path.join(output_dir, f"*_final_{index + 1}.mp4"))
+            if not os.path.basename(f).startswith("temp_")
+        ]
+        for rf in render_finals:
+            if rf not in clean_candidates:
+                clean_candidates.append(rf)
     except Exception:
-        derived = []
-    if not derived:
-        return clean
-    # Highest timestamp wins — that's the most recent styling.
-    return os.path.basename(max(derived, key=os.path.getmtime))
+        pass
+
+    derived = []
+    for clean in clean_candidates:
+        try:
+            derived.extend(
+                glob.glob(os.path.join(output_dir, f"subtitled_*_{clean}"))
+                + glob.glob(os.path.join(output_dir, f"recut_*_{clean}"))
+                + glob.glob(os.path.join(output_dir, f"hooked_*_{clean}"))
+                + glob.glob(os.path.join(output_dir, f"auto_edited_*_{clean}"))
+                + glob.glob(os.path.join(output_dir, f"edited_*_{clean}"))
+                + glob.glob(os.path.join(output_dir, f"hook_{clean}"))
+            )
+        except Exception:
+            pass
+
+    if derived:
+        return os.path.basename(max(derived, key=os.path.getmtime))
+
+    for clean in clean_candidates:
+        if os.path.exists(os.path.join(output_dir, clean)) and os.path.getsize(os.path.join(output_dir, clean)) > 0:
+            return clean
+
+    return clean_candidates[0]
 
 
 def _strip_burned_captions(output_dir, filename):
@@ -2609,7 +2622,8 @@ async def process_endpoint(
         if MIN_SOURCE_SECONDS > 0 and 0 < src_duration < MIN_SOURCE_SECONDS:
             shutil.rmtree(job_output_dir, ignore_errors=True)
             _reject_short_source(src_duration)
-        input_path = os.path.join(UPLOAD_DIR, f"{job_id}_{os.path.basename(src)}")
+        clean_thumb = re.sub(r'[^a-zA-Z0-9_.-]', '_', os.path.basename(src))
+        input_path = os.path.join(UPLOAD_DIR, f"{job_id}_{clean_thumb}")
         try:
             os.link(src, input_path)
         except OSError:
@@ -2630,7 +2644,8 @@ async def process_endpoint(
         if MIN_SOURCE_SECONDS > 0 and 0 < src_duration < MIN_SOURCE_SECONDS:
             shutil.rmtree(job_output_dir, ignore_errors=True)
             _reject_short_source(src_duration)
-        input_path = os.path.join(UPLOAD_DIR, f"{job_id}_{upload_slot['filename']}")
+        clean_slot = re.sub(r'[^a-zA-Z0-9_.-]', '_', upload_slot['filename'])
+        input_path = os.path.join(UPLOAD_DIR, f"{job_id}_{clean_slot}")
         os.replace(src, input_path)
         pending_uploads.pop(upload_id, None)
         cmd.extend(["-i", input_path])
@@ -2639,7 +2654,8 @@ async def process_endpoint(
         # basename() strips any path components from the client-supplied
         # filename so a name like "../../main.py" can't escape UPLOAD_DIR.
         safe_name = os.path.basename(file.filename or "upload") or "upload"
-        input_path = os.path.join(UPLOAD_DIR, f"{job_id}_{safe_name}")
+        clean_name = re.sub(r'[^a-zA-Z0-9_.-]', '_', safe_name)
+        input_path = os.path.join(UPLOAD_DIR, f"{job_id}_{clean_name}")
 
         # Read file in chunks to check size
         size = 0
@@ -2662,7 +2678,7 @@ async def process_endpoint(
 
         cmd.extend(["-i", input_path])
 
-    cmd.extend(["-o", job_output_dir])
+    cmd.extend(["-o", job_output_dir, "--job-id", job_id])
     if output_format and output_format != "auto":
         cmd.extend(["--format", output_format])
 

@@ -37,7 +37,8 @@ from clip_selection import (build_transcript_windows, clip_count_targets,
 from ffmpeg_utils import (video_encode_args, audio_encode_args, QUALITY,
                           QUALITY_FAST, METADATA_SCRUB, safe_remove, safe_replace,
                           run_ffmpeg_command, open_video_capture, ensure_file_unlocked,
-                          cleanup_temp_file, format_ffmpeg_error, escape_filter_value)
+                          cleanup_temp_file, format_ffmpeg_error, escape_filter_value,
+                          verify_media_file, safe_unlink)
 from dotenv import load_dotenv
 import json
 import glob
@@ -1540,8 +1541,9 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
         print(f"   ⚠️ Input video path is empty or None — skipping vertical reframe.")
         return False
     ensure_file_unlocked(input_video, timeout=15)
-    if not os.path.exists(input_video) or os.path.getsize(input_video) == 0:
-        print(f"   ⚠️ Input video {input_video} does not exist or is empty — skipping vertical reframe.")
+    valid_in, err_in = verify_media_file(input_video, min_bytes=10240)
+    if not valid_in:
+        print(f"   ❌ Input video invalid for vertical reframe: {err_in}")
         return False
 
     reframe_style = os.environ.get("REFRAME_STYLE", "auto").strip().lower()
@@ -1553,18 +1555,22 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
             result = reframe_v2.render(input_video, final_output_video, aspect_ratio,
                                        force_strategy=force_strategy,
                                        crop_overrides=crop_overrides)
-            if result and os.path.exists(final_output_video) and os.path.getsize(final_output_video) > 0:
+            ensure_file_unlocked(final_output_video, timeout=15)
+            valid_reframe, err_reframe = verify_media_file(final_output_video, min_bytes=10240)
+            if result and valid_reframe:
                 print(f"   ⏱️ Dynamic face tracking reframe total: {time.time() - t0:.1f}s")
                 return result
-            print(f"   ⚠️ Dynamic face tracking reframe produced empty or missing output — falling back to blurred background fill")
+            print(f"   ⚠️ Dynamic face tracking reframe produced invalid output ({err_reframe}) — falling back to blurred background fill")
         except Exception as e:
             if crop_overrides:
                 raise RuntimeError(
                     f"manual framing needs crop reframe, which failed ({type(e).__name__}: {e})") from e
             print(f"   ⚠️ Face tracking reframe failed ({type(e).__name__}: {e}) — falling back to blurred background fill")
 
-    if not input_video or not os.path.exists(input_video) or os.path.getsize(input_video) == 0:
-        print(f"   ⚠️ Input video {input_video} missing or empty — skipping blurred background fallback.")
+    # Double check input before fallback
+    valid_in, err_in = verify_media_file(input_video, min_bytes=10240)
+    if not valid_in:
+        print(f"   ❌ Input video {input_video} invalid — skipping blurred background fallback: {err_in}")
         return False
 
     t0 = time.time()
@@ -1597,7 +1603,7 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
         os.makedirs(out_dir, exist_ok=True)
     staging_output = final_output_video + f".staging_{uuid.uuid4().hex[:6]}.mp4"
     if os.path.isfile(staging_output):
-        cleanup_temp_file(staging_output)
+        safe_unlink(staging_output)
 
     cmd = [
         "ffmpeg", "-y", "-loglevel", "error",
@@ -1613,7 +1619,7 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
     try:
         run_ffmpeg_command(cmd, timeout=1800)
     except subprocess.CalledProcessError as copy_err:
-        cleanup_temp_file(staging_output)
+        safe_unlink(staging_output)
         cmd_reencode = [
             "ffmpeg", "-y", "-loglevel", "error",
             "-i", input_video,
@@ -1630,26 +1636,32 @@ def process_video_to_vertical(input_video, final_output_video, aspect_ratio=ASPE
         except subprocess.CalledProcessError as enc_err:
             print(f"   ❌ [Render Error] Failed to render {final_output_video}:")
             print(format_ffmpeg_error(enc_err, max_lines=30))
-            cleanup_temp_file(staging_output)
+            safe_unlink(staging_output)
             return False
     except Exception as e:
         print(f"   ❌ [Render Error] Unexpected error rendering {final_output_video}: {e}")
-        cleanup_temp_file(staging_output)
+        safe_unlink(staging_output)
         return False
 
     ensure_file_unlocked(staging_output)
 
-    # Verify output file exists and is non-empty
-    if not (os.path.exists(staging_output) and os.path.getsize(staging_output) > 0):
-        print(f"   ❌ [Render Error] Output file missing or zero bytes: {staging_output}")
-        cleanup_temp_file(staging_output)
+    # Step-gate validation on staging output
+    valid_staging, err_staging = verify_media_file(staging_output, min_bytes=10240)
+    if not valid_staging:
+        print(f"   ❌ [Render Error] Staging output invalid: {err_staging}")
+        safe_unlink(staging_output)
         return False
 
     if not safe_replace(staging_output, final_output_video):
-        # Fallback if safe_replace fails
-        cleanup_temp_file(final_output_video)
+        import shutil
+        safe_unlink(final_output_video)
         shutil.move(staging_output, final_output_video)
     ensure_file_unlocked(final_output_video)
+
+    valid_final, err_final = verify_media_file(final_output_video, min_bytes=10240)
+    if not valid_final:
+        print(f"   ❌ [Render Error] Final blurred background output invalid: {err_final}")
+        return False
 
     # Record layout range sidecar
     try:
@@ -2330,6 +2342,8 @@ if __name__ == '__main__':
                         help="Subtitle style preset: shorts, tiktok, reels, beast, gold, neon, cyber, minimal, classic, boxed, or none.")
     parser.add_argument('--fresh', action='store_true',
                         help="Force fresh clip analysis, bypassing cached metadata.")
+    parser.add_argument('--job-id', type=str, default=None,
+                        help="Canonical job identifier for isolated directories and canonical file naming.")
 
     args = parser.parse_args()
     output_format = args.format
@@ -2378,6 +2392,18 @@ if __name__ == '__main__':
                 output_dir = os.path.dirname(args.output) or os.path.dirname(input_video)
             else:
                 output_dir = os.path.dirname(input_video)
+
+    input_video = os.path.abspath(input_video)
+    output_dir = os.path.abspath(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
+
+    job_id = args.job_id
+    if not job_id:
+        base_dir_name = os.path.basename(os.path.normpath(output_dir))
+        if base_dir_name and base_dir_name not in (".", "output"):
+            job_id = re.sub(r'[^a-zA-Z0-9_-]', '_', base_dir_name)
+        else:
+            job_id = re.sub(r'[^a-zA-Z0-9_-]', '_', video_title)[:24] or uuid.uuid4().hex[:8]
 
     if not os.path.exists(input_video):
         print(f"❌ Input file not found: {input_video}")
@@ -2515,7 +2541,9 @@ if __name__ == '__main__':
             # --keep-original) or in uploads/ (upload jobs).
             clips_data['source_video'] = os.path.basename(input_video)
             clips_data['output_format'] = output_format
-            metadata_file = os.path.join(output_dir, f"{video_title}_metadata.json")
+            clips_data['job_id'] = job_id
+            clips_data['title'] = video_title
+            metadata_file = os.path.join(output_dir, f"{job_id}_metadata.json")
             with open(metadata_file, 'w') as f:
                 json.dump(clips_data, f, indent=2)
             print(f"   Saved metadata to {metadata_file}")
@@ -2524,17 +2552,18 @@ if __name__ == '__main__':
             for dead_pattern in ("temp_*.mp4", "*.staging_*.mp4", "*.wm.mp4", "seg_*.mp4"):
                 for dead_f in glob.glob(os.path.join(output_dir, dead_pattern)):
                     try:
-                        cleanup_temp_file(dead_f)
+                        safe_unlink(dead_f)
                     except Exception:
                         pass
 
             if bypass_cache:
                 # Fresh run: purge old clip results so stale previous results are never recycled
-                for old_f in glob.glob(os.path.join(output_dir, f"*{video_title}_clip_*.mp4")):
-                    try:
-                        cleanup_temp_file(old_f)
-                    except Exception:
-                        pass
+                for old_pattern in (f"*{job_id}_final_*.mp4", f"*{video_title}_clip_*.mp4"):
+                    for old_f in glob.glob(os.path.join(output_dir, old_pattern)):
+                        try:
+                            safe_unlink(old_f)
+                        except Exception:
+                            pass
 
             # 5. Process clips in parallel: each worker cuts + renders one
             # clip. Renders are mostly ffmpeg subprocesses (parallelize well);
@@ -2548,28 +2577,32 @@ if __name__ == '__main__':
                 # Ensure target output directory exists before any rendering begins
                 os.makedirs(output_dir, exist_ok=True)
 
-                clip_filename = f"{video_title}_clip_{i+1}.mp4"
-                clip_temp_path = os.path.join(output_dir, f"temp_{clip_filename}")
-                clip_final_path = os.path.join(output_dir, clip_filename)
+                seg_filename = f"temp_{job_id}_seg_{i+1}.mp4"
+                reframed_filename = f"temp_{job_id}_reframed_{i+1}.mp4"
+                final_filename = f"render_{job_id}_final_{i+1}.mp4"
 
-                os.makedirs(os.path.dirname(os.path.abspath(clip_temp_path)), exist_ok=True)
-                os.makedirs(os.path.dirname(os.path.abspath(clip_final_path)), exist_ok=True)
+                clip_temp_path = os.path.abspath(os.path.join(output_dir, seg_filename))
+                clip_reframed_path = os.path.abspath(os.path.join(output_dir, reframed_filename))
+                clip_final_path = os.path.abspath(os.path.join(output_dir, final_filename))
+
+                final_delivery = None
 
                 # Cache re-use check: if clip already rendered in an earlier session/run, skip re-cut/reframe
                 if not bypass_cache:
-                    existing_pattern = os.path.join(output_dir, f"*{video_title}_clip_{i+1}.mp4")
+                    existing_pattern = os.path.join(output_dir, f"*_final_{i+1}.mp4")
+                    legacy_pattern = os.path.join(output_dir, f"*{video_title}_clip_{i+1}.mp4")
                     existing_matches = [
-                        f for f in glob.glob(existing_pattern)
+                        f for f in (glob.glob(existing_pattern) + glob.glob(legacy_pattern))
                         if os.path.isfile(f) and os.path.getsize(f) > 0 and not os.path.basename(f).startswith("temp_")
                     ]
                     if existing_matches:
                         sub_cands = [f for f in existing_matches if os.path.basename(f).startswith("subtitled_")]
                         hook_cands = [f for f in existing_matches if os.path.basename(f).startswith("hooked_")]
-                        raw_cands = [f for f in existing_matches if os.path.basename(f) == clip_filename]
+                        raw_cands = [f for f in existing_matches if os.path.basename(f) in (final_filename, f"{video_title}_clip_{i+1}.mp4")]
                         existing_clip = (
                             max(sub_cands, key=os.path.getmtime) if sub_cands
                             else max(hook_cands, key=os.path.getmtime) if hook_cands
-                            else raw_cands[0] if raw_cands else None
+                            else raw_cands[0] if raw_cands else existing_matches[0]
                         )
                         if existing_clip:
                             print(f"   ♻️ Clip {i+1} already rendered ({os.path.basename(existing_clip)}) — skipping re-render.")
@@ -2587,75 +2620,79 @@ if __name__ == '__main__':
                             return True
 
                 try:
-                    # ffmpeg cut — re-encoding for precision on strict seconds.
-                    # Initial cut is serialized across workers to prevent concurrent
-                    # read conflicts on input_video on Windows.
-                    dur = max(1.0, float(end) - float(start))
+                    # Deterministic intermediate slicing with fast re-encode and CFR to guarantee container & moov atom
                     cut_command = [
                         'ffmpeg', '-y',
                         '-ss', f"{float(start):.3f}",
-                        '-i', input_video,
-                        '-t', f"{dur:.3f}",
-                        '-avoid_negative_ts', 'make_zero',
-                        '-map', '0:v:0',
-                        '-map', '0:a:0?',
-                        *video_encode_args(QUALITY_FAST),
-                        *audio_encode_args(),
+                        '-to', f"{float(end):.3f}",
+                        '-i', os.path.abspath(input_video),
+                        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '18',
+                        '-pix_fmt', 'yuv420p',
+                        '-r', '30',
+                        '-fps_mode', 'cfr',
+                        '-c:a', 'aac', '-b:a', '192k',
+                        '-movflags', '+faststart',
                         clip_temp_path
                     ]
+                    cut_err_captured = None
                     with CUT_LOCK:
                         try:
                             run_ffmpeg_command(cut_command)
                         except subprocess.CalledProcessError as cut_err:
-                            print(f"   ❌ Cut failed for clip {i+1}:")
-                            print(format_ffmpeg_error(cut_err, max_lines=30))
-                            return False
+                            cut_err_captured = format_ffmpeg_error(cut_err, max_lines=30)
+                        except Exception as e:
+                            cut_err_captured = str(e)
 
-                    if not ensure_file_unlocked(clip_temp_path, timeout=15) or not (os.path.exists(clip_temp_path) and os.path.getsize(clip_temp_path) > 0):
-                        print(f"   ❌ Cut file {clip_temp_path} is locked, missing or 0 bytes!")
+                    ensure_file_unlocked(clip_temp_path, timeout=15)
+                    valid_slice, slice_err = verify_media_file(clip_temp_path, min_bytes=10240)
+                    if not valid_slice:
+                        print(f"   ❌ Sliced segment validation failed for clip {i+1}: {slice_err}")
+                        if cut_err_captured:
+                            print(f"   Preceding FFmpeg stderr:\n{cut_err_captured}")
+                        # Circuit breaker: Halt immediately. Do NOT cascade to face-tracking or fallback.
                         return False
 
                     try:
                         print(f"🎥 Tracking subjects & rendering vertical video for clip {i+1}...", flush=True)
-                        success = render_clip(clip_temp_path, clip_final_path, output_format)
+                        success = render_clip(clip_temp_path, clip_reframed_path, output_format)
                     except Exception as render_err:
                         print(f"   ❌ Render failed for clip {i+1}: {render_err}")
                         if isinstance(render_err, subprocess.CalledProcessError):
                             print(format_ffmpeg_error(render_err, max_lines=30))
                         success = False
 
-                    if not success or not (os.path.exists(clip_final_path) and os.path.getsize(clip_final_path) > 0):
-                        print(f"   ❌ Final rendered clip {clip_final_path} missing or 0 bytes!")
+                    ensure_file_unlocked(clip_reframed_path, timeout=15)
+                    valid_reframe, reframe_err = verify_media_file(clip_reframed_path, min_bytes=10240)
+                    if not success or not valid_reframe:
+                        print(f"   ❌ Reframed clip {clip_reframed_path} failed validation ({reframe_err})!")
                         return False
 
-                    ensure_file_unlocked(clip_final_path, timeout=15)
-
-                    deliver_path = clip_final_path
+                    deliver_path = clip_reframed_path
 
                     if os.environ.get("WATERMARK") == "1":
                         try:
                             wm_pos = os.environ.get("WATERMARK_POSITION", "bottom-right")
-                            if apply_watermark(clip_final_path, position=wm_pos):
-                                ensure_file_unlocked(clip_final_path, timeout=15)
+                            if apply_watermark(deliver_path, position=wm_pos):
+                                ensure_file_unlocked(deliver_path, timeout=15)
                         except Exception as wm_err:
                             print(f"   ⚠️ Watermark pass warning for clip {i+1}: {wm_err}")
 
                     try:
                         import layout_ranges as _layouts
-                        clip['layout_ranges'] = _layouts.read(clip_final_path)
+                        clip['layout_ranges'] = _layouts.read(deliver_path)
                     except Exception as lr_err:
                         print(f"   ⚠️ Layout ranges read warning: {lr_err}")
                         clip['layout_ranges'] = []
 
                     try:
                         if hook_grounding.wanted(clip.get('layout_ranges', []), end - start):
-                            hook_grounding.reground(clip_final_path, clip, transcript, start, end)
+                            hook_grounding.reground(deliver_path, clip, transcript, start, end)
                     except Exception as hg_err:
                         print(f"   ⚠️ Hook grounding warning for clip {i+1}: {hg_err}")
 
                     if os.environ.get("AUTO_HOOK") == "1":
                         try:
-                            hooked = auto_hook_clip(clip_final_path, clip)
+                            hooked = auto_hook_clip(deliver_path, clip)
                             if hooked and os.path.exists(hooked[0]) and os.path.getsize(hooked[0]) > 0:
                                 deliver_path, clip['auto_hook'] = hooked
                                 ensure_file_unlocked(deliver_path, timeout=15)
@@ -2695,8 +2732,17 @@ if __name__ == '__main__':
                         captioned = None
 
                     final_delivery = captioned or deliver_path
-                    if not (os.path.exists(final_delivery) and os.path.getsize(final_delivery) > 0):
-                        print(f"   ❌ Final delivery file {final_delivery} missing or 0 bytes!")
+                    if os.path.abspath(final_delivery) == os.path.abspath(clip_reframed_path):
+                        if not safe_replace(clip_reframed_path, clip_final_path):
+                            import shutil
+                            safe_unlink(clip_final_path)
+                            shutil.move(clip_reframed_path, clip_final_path)
+                        final_delivery = clip_final_path
+
+                    ensure_file_unlocked(final_delivery, timeout=15)
+                    valid_final, final_err = verify_media_file(final_delivery, min_bytes=10240)
+                    if not valid_final:
+                        print(f"   ❌ Final delivery file {final_delivery} invalid ({final_err})!")
                         return False
 
                     print(f"   ✅ Clip {i+1} ready: {final_delivery}")
@@ -2706,7 +2752,7 @@ if __name__ == '__main__':
                         try:
                             import metadata_extractor
                             clip_meta = metadata_extractor.extract_clip_metadata(
-                                output_dir, clip_final_path, clip_index=i,
+                                output_dir, final_delivery, clip_index=i,
                                 existing_transcript=transcript,
                                 clip_start=start, clip_end=end
                             )
@@ -2716,7 +2762,7 @@ if __name__ == '__main__':
                             print(f"   ⚠️ Metadata extraction warning for clip {i+1}: {meta_err}")
 
                     print(f"CLIP_READY {i} "
-                          f"{os.path.basename(captioned or deliver_path)}")
+                          f"{os.path.basename(final_delivery)}")
                     return True
 
                 except Exception as clip_err:
@@ -2725,7 +2771,10 @@ if __name__ == '__main__':
                         print(format_ffmpeg_error(clip_err, max_lines=30))
                     return False
                 finally:
-                    cleanup_temp_file(clip_temp_path)
+                    # Clean up temporary segments ONLY after export passes integrity verification
+                    safe_unlink(clip_temp_path)
+                    if final_delivery and os.path.exists(clip_reframed_path) and os.path.abspath(clip_reframed_path) != os.path.abspath(final_delivery):
+                        safe_unlink(clip_reframed_path)
 
             clip_workers = max(int(os.environ.get("CLIP_WORKERS", "3")), 1)
             shorts = clips_data['shorts']
@@ -2759,12 +2808,12 @@ if __name__ == '__main__':
 
             # Clean up any leftover temporary clip cut files
             if output_dir and os.path.exists(output_dir):
-                for leftover_temp in glob.glob(os.path.join(output_dir, "temp_*_clip_*.mp4")):
-                    cleanup_temp_file(leftover_temp)
+                for leftover_temp in glob.glob(os.path.join(output_dir, "temp_*.mp4")):
+                    safe_unlink(leftover_temp)
 
     # Clean up original if requested
     if args.url and not args.keep_original:
-        if cleanup_temp_file(input_video):
+        if safe_unlink(input_video):
             print(f"🗑️  Cleaned up downloaded video.")
     # The job finished: a later run in this directory must transcribe afresh.
     if not args.skip_analysis:
